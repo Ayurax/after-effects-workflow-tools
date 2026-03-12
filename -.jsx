@@ -159,7 +159,7 @@ function AE_Utility_Panel(thisObj) {
 
     // Show color picker ($.colorPicker is native and cross-platform)
     var color = $.colorPicker();
-    if (color === null) return;
+    if (color < 0) return;
 
     app.beginUndoGroup("Create Solid");
 

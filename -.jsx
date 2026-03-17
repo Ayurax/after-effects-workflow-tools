@@ -2,7 +2,6 @@
 // ADVANCED DECOMPOSE
 // ============================================================================
 function decomposeSelectedPrecomps_Advanced() {
-
     var comp = app.project.activeItem;
     if (!(comp instanceof CompItem)) {
         alert("Select a composition.");
@@ -17,6 +16,7 @@ function decomposeSelectedPrecomps_Advanced() {
 
     app.beginUndoGroup("Decompose");
 
+    // Sort targets by index descending to avoid layer shifting during removal
     var targets = [];
     for (var i = 0; i < sel.length; i++) {
         if (sel[i].source instanceof CompItem) targets.push(sel[i]);
@@ -24,47 +24,161 @@ function decomposeSelectedPrecomps_Advanced() {
     targets.sort(function (a, b) { return b.index - a.index; });
 
     for (var t = 0; t < targets.length; t++) {
-
         var preLayer = targets[t];
-        var nested   = preLayer.source;
-        var idx      = preLayer.index;
+        var nested = preLayer.source;
 
-        var offset = preLayer.inPoint;
-        var displayStart = nested.displayStartTime;
+        // ===================================================
+        // TIME MAPPING HELPER
+        // ===================================================
+        /**
+         * Map a time value from nested comp to parent comp.
+         * Accounts for:
+         * - nested.displayStartTime (nested comp offset)
+         * - preLayer.inPoint (when precomp starts in parent)
+         * - preLayer.stretch (time dilation/compression)
+         * - preLayer.timeRemap (if remapping is enabled)
+         */
+        function mapNestedTime(nestedTime) {
+            var mappedTime = nestedTime;
 
-        var created = [];
+            // Remove nested comp's display start offset
+            mappedTime = mappedTime - nested.displayStartTime;
+
+            // Apply timeRemap if present and enabled on precomp layer
+            try {
+                var timeRemapProp = preLayer.property("ADBE Time Remapping");
+                if (timeRemapProp && timeRemapProp.numKeys > 0) {
+                    mappedTime = timeRemapProp.valueAtTime(mappedTime, false);
+                }
+            } catch (e) {
+                // timeRemap unavailable or failed, continue without it
+            }
+
+            // Apply stretch factor (stretch is a percentage; >100 = slower, <100 = faster)
+            if (preLayer.stretch && preLayer.stretch !== 100) {
+                mappedTime = mappedTime * (100 / preLayer.stretch);
+            }
+
+            // Offset by precomp layer's in-point in parent composition
+            mappedTime = mappedTime + preLayer.inPoint;
+
+            return mappedTime;
+        }
+
+        // ===================================================
+        // COPY LAYERS & COLLECT METADATA
+        // ===================================================
+        var copiedLayers = [];  // Stores {newLayer, srcLayer} pairs
+        var parentRelations = []; // Stores {child, parentSrc} pairs for deferred assignment
 
         for (var j = nested.numLayers; j >= 1; j--) {
+            var srcLayer = nested.layer(j);
+            if (!srcLayer) continue;
 
-            var src = nested.layer(j);
-            if (!src) continue;
+            // Copy layer to parent composition
+            var newLayer;
+            try {
+                newLayer = srcLayer.copyToComp(comp);
+            } catch (e) {
+                // Layer type not supported or other copy error
+                continue;
+            }
 
-            var srcStartTime = src.startTime;
-            var srcInPoint = src.inPoint;
-            var srcOutPoint = src.outPoint;
+            if (!newLayer) continue;
 
-            var newL;
-            try { newL = src.copyToComp(comp); } catch (e) {}
-            if (!newL) continue;
+            // ===================================================
+            // SET TIME PROPERTIES (ACCURATE MAPPING)
+            // ===================================================
+            try {
+                var srcStartTime = srcLayer.startTime;
+                var srcInPoint = srcLayer.inPoint;
+                var srcOutPoint = srcLayer.outPoint;
+                var srcDuration = srcOutPoint - srcInPoint;
 
-            newL.startTime = offset + (srcStartTime - displayStart);
-            newL.inPoint = offset + (srcInPoint - displayStart);
-            newL.outPoint = offset + (srcOutPoint - displayStart);
+                // Map times through helper function
+                newLayer.startTime = mapNestedTime(srcStartTime);
+                newLayer.inPoint = mapNestedTime(srcInPoint);
+                newLayer.outPoint = newLayer.inPoint + srcDuration;
+            } catch (e) {
+                // Use defaults if time property fails
+            }
 
-            try { newL.blendingMode     = src.blendingMode; } catch(e){}
-            try { newL.threeDLayer      = src.threeDLayer; } catch(e){}
-            try { newL.motionBlur       = src.motionBlur; } catch(e){}
-            try { newL.adjustmentLayer  = src.adjustmentLayer; } catch(e){}
-            try { newL.label            = src.label; } catch(e){}
+            // ===================================================
+            // COPY LAYER PROPERTIES
+            // ===================================================
+            try { newLayer.blendingMode = srcLayer.blendingMode; } catch (e) {}
+            try { newLayer.threeDLayer = srcLayer.threeDLayer; } catch (e) {}
+            try { newLayer.motionBlur = srcLayer.motionBlur; } catch (e) {}
+            try { newLayer.adjustmentLayer = srcLayer.adjustmentLayer; } catch (e) {}
+            try { newLayer.label = srcLayer.label; } catch (e) {}
+            try { newLayer.stretch = srcLayer.stretch; } catch (e) {}
 
-            created.push(newL);
+            // ===================================================
+            // PRESERVE TRACK MATTE RELATIONSHIPS
+            // ===================================================
+            try {
+                if (srcLayer.hasTrackMatte) {
+                    newLayer.trackMatteType = srcLayer.trackMatteType;
+                }
+            } catch (e) {}
+
+            copiedLayers.push({
+                newLayer: newLayer,
+                srcLayer: srcLayer
+            });
+
+            // Record parent relationships for deferred restoration
+            if (srcLayer.parent) {
+                parentRelations.push({
+                    child: newLayer,
+                    parentSrc: srcLayer.parent
+                });
+            }
         }
 
-        for (var c = created.length - 1; c >= 0; c--) {
-            try { created[c].moveBefore(preLayer); } catch(e){}
+        // ===================================================
+        // POSITION LAYERS (INSERT WHERE PRECOMP WAS)
+        // ===================================================
+        for (var c = copiedLayers.length - 1; c >= 0; c--) {
+            try {
+                copiedLayers[c].newLayer.moveBefore(preLayer);
+            } catch (e) {}
         }
 
-        try { preLayer.remove(); } catch(e){}
+        // ===================================================
+        // RESTORE PARENT RELATIONSHIPS
+        // Applied AFTER all layers are created to avoid invalid references
+        // ===================================================
+        for (var pr = 0; pr < parentRelations.length; pr++) {
+            var relation = parentRelations[pr];
+            var childLayer = relation.child;
+            var parentSrcLayer = relation.parentSrc;
+
+            // Find the corresponding new parent layer by source reference
+            var parentNewLayer = null;
+            for (var cl = 0; cl < copiedLayers.length; cl++) {
+                if (copiedLayers[cl].srcLayer === parentSrcLayer) {
+                    parentNewLayer = copiedLayers[cl].newLayer;
+                    break;
+                }
+            }
+
+            // Apply parent only if parent layer was also copied
+            if (parentNewLayer) {
+                try {
+                    childLayer.parent = parentNewLayer;
+                } catch (e) {
+                    // Parent assignment failed, skip
+                }
+            }
+        }
+
+        // ===================================================
+        // REMOVE ORIGINAL PRECOMP LAYER
+        // ===================================================
+        try {
+            preLayer.remove();
+        } catch (e) {}
     }
 
     app.endUndoGroup();

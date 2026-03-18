@@ -30,6 +30,15 @@ function decomposeSelectedPrecomps_Advanced() {
         // ===================================================
         // TIME MAPPING HELPER
         // ===================================================
+        // Get timeRemap property once (avoid recalculating inside loops)
+        var timeRemapProp = null;
+        try {
+            timeRemapProp = preLayer.property("ADBE Time Remapping");
+            if (timeRemapProp && !timeRemapProp.enabled) {
+                timeRemapProp = null;
+            }
+        } catch (e) {}
+
         /**
          * Map a time value from nested comp to parent comp.
          * Accounts for:
@@ -44,14 +53,11 @@ function decomposeSelectedPrecomps_Advanced() {
             // Remove nested comp's display start offset
             mappedTime = mappedTime - nested.displayStartTime;
 
-            // Apply timeRemap if present and enabled on precomp layer
-            try {
-                var timeRemapProp = preLayer.property("ADBE Time Remapping");
-                if (timeRemapProp && timeRemapProp.numKeys > 0) {
+            // Apply timeRemap if enabled
+            if (timeRemapProp) {
+                try {
                     mappedTime = timeRemapProp.valueAtTime(mappedTime, false);
-                }
-            } catch (e) {
-                // timeRemap unavailable or failed, continue without it
+                } catch (e) {}
             }
 
             // Apply stretch factor (stretch is a percentage; >100 = slower, <100 = faster)
@@ -93,12 +99,11 @@ function decomposeSelectedPrecomps_Advanced() {
                 var srcStartTime = srcLayer.startTime;
                 var srcInPoint = srcLayer.inPoint;
                 var srcOutPoint = srcLayer.outPoint;
-                var srcDuration = srcOutPoint - srcInPoint;
 
                 // Map times through helper function
                 newLayer.startTime = mapNestedTime(srcStartTime);
                 newLayer.inPoint = mapNestedTime(srcInPoint);
-                newLayer.outPoint = newLayer.inPoint + srcDuration;
+                newLayer.outPoint = mapNestedTime(srcOutPoint);
             } catch (e) {
                 // Use defaults if time property fails
             }
@@ -189,33 +194,32 @@ function decomposeSelectedPrecomps_Advanced() {
 // CENTER ANCHOR POINT
 // ============================================================================
 function centerAnchorPoint_SelectedLayers() {
-    // Get the active composition
     var comp = app.project.activeItem;
-
-    // Validate that we have an active composition
     if (!comp || !(comp instanceof CompItem)) {
         alert("Please select an active composition");
         return;
     }
 
-    // Get selected layers
     var selectedLayers = comp.selectedLayers;
-
-    // Check if any layers are selected
     if (selectedLayers.length === 0) {
         alert("Please select at least one layer");
         return;
     }
 
-    // Start undo group
     app.beginUndoGroup("Center Anchor Point");
 
-    try {
-        var currentTime = comp.time;
+    var errors = [];
+    var currentTime = comp.time;
 
-        // Process each selected layer
+    try {
         for (var i = 0; i < selectedLayers.length; i++) {
             var layer = selectedLayers[i];
+
+            // Check if sourceRectAtTime is supported
+            if (!layer.sourceRectAtTime) {
+                errors.push(layer.name + ": sourceRectAtTime not supported");
+                continue;
+            }
 
             try {
                 // Get the source rect at current time
@@ -227,62 +231,54 @@ function centerAnchorPoint_SelectedLayers() {
                 var centerX = sourceRect[0] + sourceRect[2] / 2;
                 var centerY = sourceRect[1] + sourceRect[3] / 2;
 
-                // Get the current anchor point in layer coordinates
-                var currentAnchor = layer.anchorPoint.value;
+                // Cache properties to avoid repeated access
+                var anchorProp = layer.anchorPoint;
+                var posProp = layer.position;
+                var currentAnchor = anchorProp.value;
+                var currentPosition = posProp.value;
 
                 // Calculate the offset needed to move anchor to center
                 // This offset will be applied to position to compensate
                 var offsetX = centerX - currentAnchor[0];
                 var offsetY = centerY - currentAnchor[1];
 
-                // Get current position value
-                var currentPosition = layer.position.value;
+                // Use threeDLayer property instead of checking array length
+                var is3D = layer.threeDLayer;
 
-                // Determine if this is a 3D layer (position has Z component)
-                var is3D = (currentPosition.length === 3);
-
-                // Calculate new position by offsetting to compensate for anchor point movement
-                // This keeps the layer visually in the same position on screen
+                // Calculate new position and anchor point
                 // Compensation formula: newPosition = oldPosition + (newAnchor - oldAnchor)
-                var newPosition;
-                if (is3D) {
-                    newPosition = [
-                        currentPosition[0] + offsetX,
-                        currentPosition[1] + offsetY,
-                        currentPosition[2]  // Z coordinate remains unchanged
-                    ];
+                var newAnchor = is3D ? [centerX, centerY, currentAnchor[2]] : [centerX, centerY];
+                var newPosition = is3D
+                    ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
+                    : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
+
+                // Apply changes: use setValueAtTime if animated, otherwise setValue
+                if (posProp.numKeys > 0) {
+                    posProp.setValueAtTime(currentTime, newPosition);
                 } else {
-                    newPosition = [
-                        currentPosition[0] + offsetX,
-                        currentPosition[1] + offsetY
-                    ];
+                    posProp.setValue(newPosition);
                 }
 
-                // Calculate new anchor point by moving it to the center of content
-                // Preserve Z anchor point for 3D layers
-                var newAnchor;
-                if (is3D) {
-                    newAnchor = [centerX, centerY, currentAnchor[2]];
+                if (anchorProp.numKeys > 0) {
+                    anchorProp.setValueAtTime(currentTime, newAnchor);
                 } else {
-                    newAnchor = [centerX, centerY];
+                    anchorProp.setValue(newAnchor);
                 }
-
-                // Apply the changes
-                // Position is set first to establish the compensation offset
-                layer.position.setValue(newPosition);
-                layer.anchorPoint.setValue(newAnchor);
 
             } catch (layerError) {
-                // Some layer types may not support sourceRectAtTime
-                // Skip them with alert
-                alert("Could not center anchor for layer '" + layer.name + "':\n" + layerError.message);
+                errors.push(layer.name + ": " + layerError.message);
             }
         }
 
     } catch (error) {
-        alert("Error: " + error.message);
+        errors.push("Fatal error: " + error.message);
     } finally {
         app.endUndoGroup();
+    }
+
+    // Show single alert with all errors at the end (prevent alert spam)
+    if (errors.length > 0) {
+        alert("Center Anchor Point - Issues:\n" + errors.join("\n"));
     }
 }
 
@@ -308,8 +304,6 @@ function AE_Utility_Panel(thisObj) {
         g.alignChildren = ["left","top"];
         g.margins = 0;
         g.spacing = 6;
-
-        var solidColor = [1,0,0];
 
         // ---------- helpers ----------
         function getComp() {
@@ -472,7 +466,7 @@ function AE_Utility_Panel(thisObj) {
 
         btn("De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
 
-        btn("Center Anchor","Center Anchor Point",centerAnchorPoint_SelectedLayers);
+        btn("Anc","Center Anchor Point",centerAnchorPoint_SelectedLayers);
 
         btn("PreComp","Precompose layers separately",function(){
             var comp = app.project.activeItem;

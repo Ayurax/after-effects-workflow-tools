@@ -1,4 +1,120 @@
 // ============================================================================
+// ANCHOR PRESET HELPER
+// ============================================================================
+function setAnchorPreset(layer, presetName) {
+    if (!layer.sourceRectAtTime) return false;
+
+    var comp = app.project.activeItem;
+    var currentTime = comp.time;
+    var sourceRect = layer.sourceRectAtTime(currentTime, false);
+
+    var left = sourceRect[0], top = sourceRect[1], width = sourceRect[2], height = sourceRect[3];
+    var anchorX, anchorY;
+
+    switch (presetName) {
+        case "TL": anchorX = left; anchorY = top; break;
+        case "TC": anchorX = left + width / 2; anchorY = top; break;
+        case "TR": anchorX = left + width; anchorY = top; break;
+        case "CL": anchorX = left; anchorY = top + height / 2; break;
+        case "C": anchorX = left + width / 2; anchorY = top + height / 2; break;
+        case "CR": anchorX = left + width; anchorY = top + height / 2; break;
+        case "BL": anchorX = left; anchorY = top + height; break;
+        case "BC": anchorX = left + width / 2; anchorY = top + height; break;
+        case "BR": anchorX = left + width; anchorY = top + height; break;
+        default: return false;
+    }
+
+    try {
+        var currentAnchor = layer.anchorPoint.value;
+        var currentPosition = layer.position.value;
+        var is3D = layer.threeDLayer;
+
+        var offsetX = anchorX - currentAnchor[0];
+        var offsetY = anchorY - currentAnchor[1];
+
+        var newAnchor = is3D ? [anchorX, anchorY, currentAnchor[2]] : [anchorX, anchorY];
+        var newPosition = is3D
+            ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
+            : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
+
+        var anchorProp = layer.anchorPoint;
+        var posProp = layer.position;
+
+        if (posProp.numKeys > 0) {
+            posProp.setValueAtTime(currentTime, newPosition);
+        } else {
+            posProp.setValue(newPosition);
+        }
+
+        if (anchorProp.numKeys > 0) {
+            anchorProp.setValueAtTime(currentTime, newAnchor);
+        } else {
+            anchorProp.setValue(newAnchor);
+        }
+
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+
+// ============================================================================
+// ANCHOR PRESET POPUP
+// ============================================================================
+function openAnchorPresetPanel() {
+    var comp = app.project.activeItem;
+    if (!comp || !(comp instanceof CompItem)) {
+        alert("Select a composition");
+        return;
+    }
+
+    var selectedLayers = comp.selectedLayers;
+    if (selectedLayers.length === 0) {
+        alert("Select at least one layer");
+        return;
+    }
+
+    var win = new Window("palette", "Anchor Presets", undefined, {resizeable: false});
+    win.orientation = "column";
+    win.margins = 2;
+    win.spacing = 2;
+
+    var presets = [["TL", "TC", "TR"], ["CL", "C", "CR"], ["BL", "BC", "BR"]];
+
+    for (var row = 0; row < 3; row++) {
+        var rowGroup = win.add("group");
+        rowGroup.orientation = "row";
+        rowGroup.margins = 0;
+        rowGroup.spacing = 2;
+
+        for (var col = 0; col < 3; col++) {
+            var label = presets[row][col];
+            var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
+            b.minimumSize = [24, 24];
+            b.maximumSize = [30, 30];
+
+            (function (presetName) {
+                b.onClick = function () {
+                    app.beginUndoGroup("AE Panel - Anchor Preset");
+                    try {
+                        for (var i = 0; i < selectedLayers.length; i++) {
+                            setAnchorPreset(selectedLayers[i], presetName);
+                        }
+                    } catch (e) {}
+                    app.endUndoGroup();
+                    win.close();
+                };
+            })(label);
+        }
+    }
+
+    win.center();
+    win.show();
+}
+
+
+// ============================================================================
 // ADVANCED DECOMPOSE
 // ============================================================================
 function decomposeSelectedPrecomps_Advanced() {
@@ -14,7 +130,7 @@ function decomposeSelectedPrecomps_Advanced() {
         return;
     }
 
-    app.beginUndoGroup("Decompose");
+    app.beginUndoGroup("AE Panel - Decompose");
 
     // Sort targets by index descending to avoid layer shifting during removal
     var targets = [];
@@ -206,7 +322,7 @@ function centerAnchorPoint_SelectedLayers() {
         return;
     }
 
-    app.beginUndoGroup("Center Anchor Point");
+    app.beginUndoGroup("AE Panel - Center Anchor");
 
     var errors = [];
     var currentTime = comp.time;
@@ -320,7 +436,7 @@ function AE_Utility_Panel(thisObj) {
             if (!c) return;
 
             var sel = c.selectedLayers;
-            app.beginUndoGroup("RAJ+gpt");
+            app.beginUndoGroup("AE Panel - Action");
 
             if (!sel.length && allowEmpty) fn(c, null, 0);
             else for (var i=0;i<sel.length;i++) fn(c, sel[i], i);
@@ -335,7 +451,7 @@ function AE_Utility_Panel(thisObj) {
             row.margins = 0;
 
             var b = row.add("button", undefined, label, { style:"toolbutton" });
-            b.characters = label.length;
+            b.preferredSize = [40, 18];
             b.minimumSize.height = 16;
             b.maximumSize.height = 18;
             b.alignment = ["left","center"];
@@ -371,7 +487,7 @@ function AE_Utility_Panel(thisObj) {
     var color = $.colorPicker();
     if (color < 0) return;
 
-    app.beginUndoGroup("Create Solid");
+    app.beginUndoGroup("AE Panel - Solid");
 
     // Convert hex color (0xRRGGBB) to normalized RGB [0-1]
     var r = ((color >> 16) & 0xFF) / 255;
@@ -410,7 +526,7 @@ function AE_Utility_Panel(thisObj) {
         btn("1f","1-Frame Adjustment",function(){
             var c=getComp(); if(!c) return;
             var prevLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
-            app.beginUndoGroup("1f Adj");
+            app.beginUndoGroup("AE Panel - 1F Adj");
             var t=c.time;
             var frameDur=c.frameDuration;
             var a=c.layers.addSolid([1,1,1],"1f Adj",c.width,c.height,c.pixelAspect);
@@ -425,7 +541,7 @@ function AE_Utility_Panel(thisObj) {
 
         btn("Cam","Camera + Rig",function(){
             var c=getComp(); if(!c) return;
-            app.beginUndoGroup("Camera Rig");
+            app.beginUndoGroup("AE Panel - Camera Rig");
             var cam=c.layers.addCamera("Camera",[c.width/2,c.height/2]);
             var ctl=c.layers.addNull();
             ctl.name="Camera Controller";ctl.threeDLayer=true;ctl.motionBlur=true;ctl.label=16;
@@ -442,7 +558,7 @@ function AE_Utility_Panel(thisObj) {
         btn("AK","Align Keys",function(){
             var c=getComp(); if(!c) return;
             var fd=1/c.frameRate;
-            app.beginUndoGroup("Align Keys");
+            app.beginUndoGroup("AE Panel - Align Keys");
             var sel=c.selectedLayers;
             for(var i=0;i<sel.length;i++){
                 var props=sel[i].selectedProperties;
@@ -466,7 +582,7 @@ function AE_Utility_Panel(thisObj) {
 
         btn("De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
 
-        btn("Anc","Center Anchor Point",centerAnchorPoint_SelectedLayers);
+        btn("Anc","Anchor Presets",openAnchorPresetPanel);
 
         btn("PreComp","Precompose layers separately",function(){
             var comp = app.project.activeItem;
@@ -481,7 +597,7 @@ function AE_Utility_Panel(thisObj) {
                 return;
             }
 
-            app.beginUndoGroup("Precompose Layers");
+            app.beginUndoGroup("AE Panel - Precompose");
 
             // Collect layer data before processing
             var layerData = [];

@@ -186,6 +186,108 @@ function decomposeSelectedPrecomps_Advanced() {
 
 
 // ============================================================================
+// CENTER ANCHOR POINT
+// ============================================================================
+function centerAnchorPoint_SelectedLayers() {
+    // Get the active composition
+    var comp = app.project.activeItem;
+
+    // Validate that we have an active composition
+    if (!comp || !(comp instanceof CompItem)) {
+        alert("Please select an active composition");
+        return;
+    }
+
+    // Get selected layers
+    var selectedLayers = comp.selectedLayers;
+
+    // Check if any layers are selected
+    if (selectedLayers.length === 0) {
+        alert("Please select at least one layer");
+        return;
+    }
+
+    // Start undo group
+    app.beginUndoGroup("Center Anchor Point");
+
+    try {
+        var currentTime = comp.time;
+
+        // Process each selected layer
+        for (var i = 0; i < selectedLayers.length; i++) {
+            var layer = selectedLayers[i];
+
+            try {
+                // Get the source rect at current time
+                // sourceRectAtTime returns [left, top, width, height]
+                var sourceRect = layer.sourceRectAtTime(currentTime, false);
+
+                // Calculate the visual center of the layer's content in layer coordinates
+                // Center = (left, top) + (width/2, height/2)
+                var centerX = sourceRect[0] + sourceRect[2] / 2;
+                var centerY = sourceRect[1] + sourceRect[3] / 2;
+
+                // Get the current anchor point in layer coordinates
+                var currentAnchor = layer.anchorPoint.value;
+
+                // Calculate the offset needed to move anchor to center
+                // This offset will be applied to position to compensate
+                var offsetX = centerX - currentAnchor[0];
+                var offsetY = centerY - currentAnchor[1];
+
+                // Get current position value
+                var currentPosition = layer.position.value;
+
+                // Determine if this is a 3D layer (position has Z component)
+                var is3D = (currentPosition.length === 3);
+
+                // Calculate new position by offsetting to compensate for anchor point movement
+                // This keeps the layer visually in the same position on screen
+                // Compensation formula: newPosition = oldPosition + (newAnchor - oldAnchor)
+                var newPosition;
+                if (is3D) {
+                    newPosition = [
+                        currentPosition[0] + offsetX,
+                        currentPosition[1] + offsetY,
+                        currentPosition[2]  // Z coordinate remains unchanged
+                    ];
+                } else {
+                    newPosition = [
+                        currentPosition[0] + offsetX,
+                        currentPosition[1] + offsetY
+                    ];
+                }
+
+                // Calculate new anchor point by moving it to the center of content
+                // Preserve Z anchor point for 3D layers
+                var newAnchor;
+                if (is3D) {
+                    newAnchor = [centerX, centerY, currentAnchor[2]];
+                } else {
+                    newAnchor = [centerX, centerY];
+                }
+
+                // Apply the changes
+                // Position is set first to establish the compensation offset
+                layer.position.setValue(newPosition);
+                layer.anchorPoint.setValue(newAnchor);
+
+            } catch (layerError) {
+                // Some layer types may not support sourceRectAtTime
+                // Skip them with alert
+                alert("Could not center anchor for layer '" + layer.name + "':\n" + layerError.message);
+            }
+        }
+
+    } catch (error) {
+        alert("Error: " + error.message);
+    } finally {
+        app.endUndoGroup();
+    }
+}
+
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -369,6 +471,8 @@ function AE_Utility_Panel(thisObj) {
         });
 
         btn("De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
+
+        btn("Center Anchor","Center Anchor Point",centerAnchorPoint_SelectedLayers);
 
         btn("PreComp","Precompose layers separately",function(){
             var comp = app.project.activeItem;

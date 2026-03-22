@@ -322,7 +322,7 @@ function centerAnchorPoint_SelectedLayers() {
         return;
     }
 
-    app.beginUndoGroup("Center Anchor Point");
+    app.beginUndoGroup("AE Panel - Center Anchor");
 
     var errors = [];
     var currentTime = comp.time;
@@ -436,7 +436,7 @@ function AE_Utility_Panel(thisObj) {
             if (!c) return;
 
             var sel = c.selectedLayers;
-            app.beginUndoGroup("RAJ+gpt");
+            app.beginUndoGroup("AE Panel - Action");
 
             if (!sel.length && allowEmpty) fn(c, null, 0);
             else for (var i=0;i<sel.length;i++) fn(c, sel[i], i);
@@ -487,7 +487,7 @@ function AE_Utility_Panel(thisObj) {
     var color = $.colorPicker();
     if (color < 0) return;
 
-    app.beginUndoGroup("Create Solid");
+    app.beginUndoGroup("AE Panel - Solid");
 
     // Convert hex color (0xRRGGBB) to normalized RGB [0-1]
     var r = ((color >> 16) & 0xFF) / 255;
@@ -526,7 +526,7 @@ function AE_Utility_Panel(thisObj) {
         btn("1f","1-Frame Adjustment",function(){
             var c=getComp(); if(!c) return;
             var prevLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
-            app.beginUndoGroup("1f Adj");
+            app.beginUndoGroup("AE Panel - 1F Adj");
             var t=c.time;
             var frameDur=c.frameDuration;
             var a=c.layers.addSolid([1,1,1],"1f Adj",c.width,c.height,c.pixelAspect);
@@ -541,24 +541,31 @@ function AE_Utility_Panel(thisObj) {
 
         btn("Cam","Camera + Rig",function(){
             var c=getComp(); if(!c) return;
-            app.beginUndoGroup("Camera Rig");
+            app.beginUndoGroup("AE Panel - Camera Rig");
             var cam=c.layers.addCamera("Camera",[c.width/2,c.height/2]);
             var ctl=c.layers.addNull();
             ctl.name="Camera Controller";ctl.threeDLayer=true;ctl.motionBlur=true;ctl.label=16;
-            ctl.moveBefore(cam);cam.parent=ctl;
+
             if(c.selectedLayers.length){
-                var l=c.selectedLayers[0];
-                ctl.startTime=cam.startTime=l.startTime;
-                ctl.inPoint=cam.inPoint=l.inPoint;
-                ctl.outPoint=cam.outPoint=l.outPoint;
+                var sel=c.selectedLayers;
+                var minIn=sel[0].inPoint,maxOut=sel[0].outPoint;
+                for(var i=1;i<sel.length;i++){
+                    if(sel[i].inPoint<minIn)minIn=sel[i].inPoint;
+                    if(sel[i].outPoint>maxOut)maxOut=sel[i].outPoint;
+                }
+                cam.startTime=ctl.startTime=minIn;
+                cam.inPoint=ctl.inPoint=minIn;
+                cam.outPoint=ctl.outPoint=maxOut;
             }
+
+            ctl.moveBefore(cam);cam.parent=ctl;
             app.endUndoGroup();
         });
 
         btn("AK","Align Keys",function(){
             var c=getComp(); if(!c) return;
             var fd=1/c.frameRate;
-            app.beginUndoGroup("Align Keys");
+            app.beginUndoGroup("AE Panel - Align Keys");
             var sel=c.selectedLayers;
             for(var i=0;i<sel.length;i++){
                 var props=sel[i].selectedProperties;
@@ -597,7 +604,7 @@ function AE_Utility_Panel(thisObj) {
                 return;
             }
 
-            app.beginUndoGroup("Precompose Layers");
+            app.beginUndoGroup("AE Panel - Precompose");
 
             // Collect layer data before processing
             var layerData = [];

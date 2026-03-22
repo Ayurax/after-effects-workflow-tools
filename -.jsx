@@ -640,6 +640,8 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         });
 
+        btn("Presets","Anchor Presets",openAnchorPresetPanel);
+
         win.layout.layout(true);
         return win;
     }

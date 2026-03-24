@@ -1,61 +1,91 @@
 // ============================================================================
 // ANCHOR PRESET HELPER
 // ============================================================================
-function setAnchorPreset(layer, presetName) {
-    if (!layer.sourceRectAtTime) return false;
-
+function setAnchorPreset(mode, layerIndices) {
     var comp = app.project.activeItem;
-    var currentTime = comp.time;
-    var sourceRect = layer.sourceRectAtTime(currentTime, false);
-
-    var left = sourceRect[0], top = sourceRect[1], width = sourceRect[2], height = sourceRect[3];
-    var anchorX, anchorY;
-
-    switch (presetName) {
-        case "TL": anchorX = left; anchorY = top; break;
-        case "TC": anchorX = left + width / 2; anchorY = top; break;
-        case "TR": anchorX = left + width; anchorY = top; break;
-        case "CL": anchorX = left; anchorY = top + height / 2; break;
-        case "C": anchorX = left + width / 2; anchorY = top + height / 2; break;
-        case "CR": anchorX = left + width; anchorY = top + height / 2; break;
-        case "BL": anchorX = left; anchorY = top + height; break;
-        case "BC": anchorX = left + width / 2; anchorY = top + height; break;
-        case "BR": anchorX = left + width; anchorY = top + height; break;
-        default: return false;
-    }
-
-    try {
-        var currentAnchor = layer.anchorPoint.value;
-        var currentPosition = layer.position.value;
-        var is3D = layer.threeDLayer;
-
-        var offsetX = anchorX - currentAnchor[0];
-        var offsetY = anchorY - currentAnchor[1];
-
-        var newAnchor = is3D ? [anchorX, anchorY, currentAnchor[2]] : [anchorX, anchorY];
-        var newPosition = is3D
-            ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
-            : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
-
-        var anchorProp = layer.anchorPoint;
-        var posProp = layer.position;
-
-        if (posProp.numKeys > 0) {
-            posProp.setValueAtTime(currentTime, newPosition);
-        } else {
-            posProp.setValue(newPosition);
-        }
-
-        if (anchorProp.numKeys > 0) {
-            anchorProp.setValueAtTime(currentTime, newAnchor);
-        } else {
-            anchorProp.setValue(newAnchor);
-        }
-
-        return true;
-    } catch (e) {
+    if (!comp || !(comp instanceof CompItem)) {
         return false;
     }
+
+    // Rebuild layer array from indices (stable reference)
+    var layersToProcess = [];
+    if (layerIndices && layerIndices.length > 0) {
+        for (var idx = 0; idx < layerIndices.length; idx++) {
+            var layer = comp.layer(layerIndices[idx]);
+            if (layer) layersToProcess.push(layer);
+        }
+    } else {
+        layersToProcess = comp.selectedLayers;
+    }
+    
+    if (layersToProcess.length === 0) {
+        alert("No layers to process");
+        return false;
+    }
+
+    var currentTime = comp.time;
+    var successCount = 0;
+
+    for (var i = 0; i < layersToProcess.length; i++) {
+        var layer = layersToProcess[i];
+
+        // Skip layers without sourceRectAtTime support
+        if (typeof layer.sourceRectAtTime !== "function") continue;
+
+        try {
+            var sourceRect = layer.sourceRectAtTime(currentTime, false);
+            var left = sourceRect[0], top = sourceRect[1], width = sourceRect[2], height = sourceRect[3];
+            var anchorX, anchorY;
+
+            switch (mode) {
+                case "TL": anchorX = left; anchorY = top; break;
+                case "TC": anchorX = left + width / 2; anchorY = top; break;
+                case "TR": anchorX = left + width; anchorY = top; break;
+                case "CL": anchorX = left; anchorY = top + height / 2; break;
+                case "C": anchorX = left + width / 2; anchorY = top + height / 2; break;
+                case "CR": anchorX = left + width; anchorY = top + height / 2; break;
+                case "BL": anchorX = left; anchorY = top + height; break;
+                case "BC": anchorX = left + width / 2; anchorY = top + height; break;
+                case "BR": anchorX = left + width; anchorY = top + height; break;
+                default: return false;
+            }
+
+            var currentAnchor = layer.anchorPoint.value;
+            var currentPosition = layer.position.value;
+            var is3D = layer.threeDLayer;
+
+            var offsetX = anchorX - currentAnchor[0];
+            var offsetY = anchorY - currentAnchor[1];
+
+            var newAnchor = is3D ? [anchorX, anchorY, currentAnchor[2]] : [anchorX, anchorY];
+            var newPosition = is3D
+                ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
+                : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
+
+            // Apply changes: use setValueAtTime if animated, otherwise setValue
+            var anchorProp = layer.anchorPoint;
+            var posProp = layer.position;
+
+            if (posProp.numKeys > 0) {
+                posProp.setValueAtTime(currentTime, newPosition);
+            } else {
+                posProp.setValue(newPosition);
+            }
+
+            if (anchorProp.numKeys > 0) {
+                anchorProp.setValueAtTime(currentTime, newAnchor);
+            } else {
+                anchorProp.setValue(newAnchor);
+            }
+
+            successCount++;
+
+        } catch (e) {
+            $.writeln("Error on " + layer.name + ": " + e.message);
+        }
+    }
+
+    return successCount > 0;
 }
 
 
@@ -75,6 +105,12 @@ function openAnchorPresetPanel() {
         return;
     }
 
+    // Store layer indices (stable)
+    var savedLayerIndices = [];
+    for (var s = 0; s < selectedLayers.length; s++) {
+        savedLayerIndices.push(selectedLayers[s].index);
+    }
+
     var win = new Window("palette", "Anchor Presets", undefined, {resizeable: false});
     win.orientation = "column";
     win.margins = 2;
@@ -85,27 +121,21 @@ function openAnchorPresetPanel() {
     for (var row = 0; row < 3; row++) {
         var rowGroup = win.add("group");
         rowGroup.orientation = "row";
-        rowGroup.margins = 0;
         rowGroup.spacing = 2;
 
         for (var col = 0; col < 3; col++) {
             var label = presets[row][col];
             var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
             b.minimumSize = [24, 24];
-            b.maximumSize = [30, 30];
 
-            (function (presetName) {
+            (function (presetMode, layerIndices) {
                 b.onClick = function () {
-                    app.beginUndoGroup("AE Panel - Anchor Preset");
-                    try {
-                        for (var i = 0; i < selectedLayers.length; i++) {
-                            setAnchorPreset(selectedLayers[i], presetName);
-                        }
-                    } catch (e) {}
+                    app.beginUndoGroup("Anchor Preset");
+                    setAnchorPreset(presetMode, layerIndices);
                     app.endUndoGroup();
                     win.close();
                 };
-            })(label);
+            })(label, savedLayerIndices);
         }
     }
 
@@ -411,14 +441,14 @@ function AE_Utility_Panel(thisObj) {
             : new Window("palette", " ", undefined, { resizeable: true });
 
         win.orientation = "column";
-        win.alignChildren = ["left","top"];
+        win.alignChildren = "fill";
         win.margins = 0;
         win.spacing = 0;
 
         var g = win.add("group");
         g.orientation = "column";
-        g.alignChildren = ["left","top"];
-        g.margins = 0;
+        g.alignChildren = "fill";
+        g.margins = 8;
         g.spacing = 6;
 
         // ---------- helpers ----------
@@ -444,31 +474,61 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         }
 
-        function btn(label, tip, fn) {
-            var row = g.add("group");
-            row.orientation = "row";
-            row.alignChildren = ["left","center"];
-            row.margins = 0;
-
-            var b = row.add("button", undefined, label, { style:"toolbutton" });
-            b.preferredSize = [40, 18];
-            b.minimumSize.height = 16;
-            b.maximumSize.height = 18;
-            b.alignment = ["left","center"];
+        function btn(group, label, tip, fn, width) {
+            var b = group.add("button", undefined, label, { style:"toolbutton" });
+            var sz = width || 26;
+            b.preferredSize = [sz, 18];
+            b.minimumSize = [sz, 18];
+            b.maximumSize = [sz, 18];
             b.helpTip = tip;
             b.onClick = fn;
             return b;
         }
 
-        // ---------- buttons ----------
-        btn("Null","Create Null",function(){
+        function addSection(title) {
+            var section = g.add("group");
+            section.orientation = "column";
+            section.alignChildren = "fill";
+            section.margins = 0;
+            section.spacing = 3;
+
+            var titleText = section.add("statictext", undefined, title);
+
+            var btnGroup = section.add("group");
+            btnGroup.orientation = "row";
+            btnGroup.alignChildren = "left";
+            btnGroup.margins = 0;
+            btnGroup.spacing = 2;
+
+            return { section: section, btnGroup: btnGroup };
+        }
+
+        function addSeparator() {
+            var sep = g.add("panel");
+            sep.alignChildren = "fill";
+            sep.margins = 0;
+            sep.height = 1;
+            sep.minimumSize = [0, 1];
+        }
+
+        // ===== CREATE =====
+        var createSec = addSection("Create");
+
+        // Row 1: Null, ADJ
+        var row1 = createSec.section.add("group");
+        row1.orientation = "row";
+        row1.alignChildren = "left";
+        row1.margins = 0;
+        row1.spacing = 2;
+
+        btn(row1,"Null","Create Null",function(){
             perSelection(function(c,l){
                 var n=c.layers.addNull(); n.label=1;
                 if(l){n.startTime=l.startTime;n.inPoint=l.inPoint;n.outPoint=l.outPoint;n.moveBefore(l);}
             },true);
         });
 
-        btn("ADJ","Adjustment Layer",function(){
+        btn(row1,"ADJ","Adjustment Layer",function(){
             perSelection(function(c,l,i){
                 var a=c.layers.addSolid([1,1,1],"Adj "+(i+1),c.width,c.height,c.pixelAspect);
                 a.adjustmentLayer=true;a.label=11;
@@ -476,54 +536,54 @@ function AE_Utility_Panel(thisObj) {
             },true);
         });
 
-        btn("Solid", "Create Solid (Eyedropper)", function () {
+        // Row 2: Solid, Text
+        var row2 = createSec.section.add("group");
+        row2.orientation = "row";
+        row2.alignChildren = "left";
+        row2.margins = 0;
+        row2.spacing = 2;
 
-    var c = getComp();
-    if (!c) return;
+        btn(row2, "Solid", "Create Solid (Eyedropper)", function () {
+            var c = getComp();
+            if (!c) return;
+            var prevLayer = c.selectedLayers.length ? c.selectedLayers[0] : null;
+            var color = $.colorPicker();
+            if (color < 0) return;
+            app.beginUndoGroup("AE Panel - Solid");
+            var r = ((color >> 16) & 0xFF) / 255;
+            var gb = ((color >> 8) & 0xFF) / 255;
+            var b = (color & 0xFF) / 255;
+            var s = c.layers.addSolid([r, gb, b], "Solid", c.width, c.height, c.pixelAspect);
+            s.label = 8;
+            if (prevLayer) {
+                s.startTime = prevLayer.startTime;
+                s.inPoint   = prevLayer.inPoint;
+                s.outPoint  = prevLayer.outPoint;
+                s.moveBefore(prevLayer);
+            } else {
+                var t   = c.workAreaStart;
+                var dur = c.workAreaDuration;
+                if (dur === 0) dur = 1;
+                s.startTime = t;
+                s.inPoint   = t;
+                s.outPoint  = t + dur;
+            }
+            app.endUndoGroup();
+        });
 
-    var prevLayer = c.selectedLayers.length ? c.selectedLayers[0] : null;
-
-    // Show color picker ($.colorPicker is native and cross-platform)
-    var color = $.colorPicker();
-    if (color < 0) return;
-
-    app.beginUndoGroup("AE Panel - Solid");
-
-    // Convert hex color (0xRRGGBB) to normalized RGB [0-1]
-    var r = ((color >> 16) & 0xFF) / 255;
-    var g = ((color >> 8) & 0xFF) / 255;
-    var b = (color & 0xFF) / 255;
-
-    // Create solid directly with converted color
-    var s = c.layers.addSolid([r, g, b], "Solid", c.width, c.height, c.pixelAspect);
-    s.label = 8;
-
-    if (prevLayer) {
-        s.startTime = prevLayer.startTime;
-        s.inPoint   = prevLayer.inPoint;
-        s.outPoint  = prevLayer.outPoint;
-        s.moveBefore(prevLayer);
-    } else {
-        var t   = c.workAreaStart;
-        var dur = c.workAreaDuration;
-        if (dur === 0) dur = 1;
-
-        s.startTime = t;
-        s.inPoint   = t;
-        s.outPoint  = t + dur;
-    }
-
-    app.endUndoGroup();
-});
-
-        btn("Text","Create Text",function(){
+        btn(row2,"Text","Create Text",function(){
             perSelection(function(c,l,i){
                 var t=c.layers.addText("Text "+(i+1)); t.label=9;
                 if(l){t.startTime=l.startTime;t.inPoint=l.inPoint;t.outPoint=l.outPoint;t.moveBefore(l);}
             },true);
         });
 
-        btn("1f","1-Frame Adjustment",function(){
+        addSeparator();
+
+        // ===== UTILITIES =====
+        var utilSec = addSection("Utilities");
+        
+        btn(utilSec.btnGroup,"1f","1-Frame Adjustment",function(){
             var c=getComp(); if(!c) return;
             var prevLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
             app.beginUndoGroup("AE Panel - 1F Adj");
@@ -539,30 +599,7 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         });
 
-        btn("Cam","Camera + Rig",function(){
-            var c=getComp(); if(!c) return;
-            app.beginUndoGroup("AE Panel - Camera Rig");
-            var cam=c.layers.addCamera("Camera",[c.width/2,c.height/2]);
-            var ctl=c.layers.addNull();
-            ctl.name="Camera Controller";ctl.threeDLayer=true;ctl.motionBlur=true;ctl.label=16;
-
-            if(c.selectedLayers.length){
-                var sel=c.selectedLayers;
-                var minIn=sel[0].inPoint,maxOut=sel[0].outPoint;
-                for(var i=1;i<sel.length;i++){
-                    if(sel[i].inPoint<minIn)minIn=sel[i].inPoint;
-                    if(sel[i].outPoint>maxOut)maxOut=sel[i].outPoint;
-                }
-                cam.startTime=ctl.startTime=minIn;
-                cam.inPoint=ctl.inPoint=minIn;
-                cam.outPoint=ctl.outPoint=maxOut;
-            }
-
-            ctl.moveBefore(cam);cam.parent=ctl;
-            app.endUndoGroup();
-        });
-
-        btn("AK","Align Keys",function(){
+        btn(utilSec.btnGroup,"AK","Align Keys",function(){
             var c=getComp(); if(!c) return;
             var fd=1/c.frameRate;
             app.beginUndoGroup("AE Panel - Align Keys");
@@ -587,11 +624,40 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         });
 
-        btn("De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
+        addSeparator();
 
-        btn("Anc","Anchor Presets",openAnchorPresetPanel);
+        // ===== CAMERA =====
+        var camSec = addSection("Camera");
+        btn(camSec.btnGroup,"Cam","Camera + Rig",function(){
+            var c=getComp(); if(!c) return;
+            app.beginUndoGroup("AE Panel - Camera Rig");
+            var cam=c.layers.addCamera("Camera",[c.width/2,c.height/2]);
+            var ctl=c.layers.addNull();
+            ctl.name="Camera Controller";ctl.threeDLayer=true;ctl.motionBlur=true;ctl.label=16;
 
-        btn("PreComp","Precompose layers separately",function(){
+            if(c.selectedLayers.length){
+                var sel=c.selectedLayers;
+                var minIn=sel[0].inPoint,maxOut=sel[0].outPoint;
+                for(var i=1;i<sel.length;i++){
+                    if(sel[i].inPoint<minIn)minIn=sel[i].inPoint;
+                    if(sel[i].outPoint>maxOut)maxOut=sel[i].outPoint;
+                }
+                cam.startTime=ctl.startTime=minIn;
+                cam.inPoint=ctl.inPoint=minIn;
+                cam.outPoint=ctl.outPoint=maxOut;
+            }
+
+            ctl.moveBefore(cam);cam.parent=ctl;
+            app.endUndoGroup();
+        });
+
+        addSeparator();
+
+        // ===== LAYER OPS =====
+        var layerSec = addSection("Layer Ops");
+        btn(layerSec.btnGroup,"De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
+
+        btn(layerSec.btnGroup,"PreComp","Precompose layers separately",function(){
             var comp = app.project.activeItem;
             if (!(comp instanceof CompItem)) {
                 alert("Select a composition.");
@@ -606,7 +672,6 @@ function AE_Utility_Panel(thisObj) {
 
             app.beginUndoGroup("AE Panel - Precompose");
 
-            // Collect layer data before processing
             var layerData = [];
             for (var i = 0; i < selectedLayers.length; i++) {
                 var layer = selectedLayers[i];
@@ -618,17 +683,11 @@ function AE_Utility_Panel(thisObj) {
                 });
             }
 
-            // Sort by index descending to avoid shifting
             layerData.sort(function (a, b) { return b.index - a.index; });
 
-            // Precompose each layer separately
             for (var i = 0; i < layerData.length; i++) {
                 var data = layerData[i];
-
-                // Precompose single layer—returns CompItem, not Layer
                 comp.layers.precompose([data.index], "PreComp " + (i + 1), true);
-
-                // New precomp layer replaces original at same index
                 var newLayer = comp.layer(data.index);
                 if (newLayer) {
                     newLayer.startTime = data.startTime;
@@ -640,7 +699,81 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         });
 
-        btn("Presets","Anchor Presets",openAnchorPresetPanel);
+        addSeparator();
+
+        // ===== ANCHOR PRESETS (COLLAPSIBLE) =====
+        var anchorSec = g.add("group");
+        anchorSec.orientation = "column";
+        anchorSec.alignChildren = "fill";
+        anchorSec.margins = 0;
+        anchorSec.spacing = 3;
+
+        // Collapsible header button
+        var anchorHeaderBtn = anchorSec.add("button", undefined, "Anchor ▼");
+        anchorHeaderBtn.preferredSize = [undefined, 18];
+        anchorHeaderBtn.helpTip = "Toggle Anchor Presets";
+
+        // Content group (hidden by default)
+        var anchorContent = anchorSec.add("group");
+        anchorContent.orientation = "column";
+        anchorContent.alignChildren = "fill";
+        anchorContent.margins = 0;
+        anchorContent.spacing = 2;
+        anchorContent.visible = false;  // Start collapsed
+
+        // Toggle state
+        var isExpanded = false;
+
+        // Header click handler
+        anchorHeaderBtn.onClick = function() {
+            isExpanded = !isExpanded;
+            anchorContent.visible = isExpanded;
+            anchorHeaderBtn.text = isExpanded ? "Anchor ▲" : "Anchor ▼";
+            win.layout.layout(true);
+        };
+
+        // 3x3 Anchor Preset Grid
+        var presets = [["TL", "TC", "TR"], ["CL", "C", "CR"], ["BL", "BC", "BR"]];
+
+        for (var row = 0; row < 3; row++) {
+            var rowGroup = anchorContent.add("group");
+            rowGroup.orientation = "row";
+            rowGroup.alignChildren = "left";
+            rowGroup.margins = 0;
+            rowGroup.spacing = 2;
+
+            for (var col = 0; col < 3; col++) {
+                var label = presets[row][col];
+                var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
+                b.preferredSize = [18, 18];
+                b.minimumSize = [18, 18];
+                b.maximumSize = [18, 18];
+
+                (function (presetMode) {
+                    b.onClick = function () {
+                        var comp = app.project.activeItem;
+                        if (!comp || !(comp instanceof CompItem)) {
+                            alert("Select a composition");
+                            return;
+                        }
+                        var selectedLayers = comp.selectedLayers;
+                        if (selectedLayers.length === 0) {
+                            alert("Select at least one layer");
+                            return;
+                        }
+
+                        var savedLayerIndices = [];
+                        for (var s = 0; s < selectedLayers.length; s++) {
+                            savedLayerIndices.push(selectedLayers[s].index);
+                        }
+
+                        app.beginUndoGroup("Anchor Preset");
+                        setAnchorPreset(presetMode, savedLayerIndices);
+                        app.endUndoGroup();
+                    };
+                })(label);
+            }
+        }
 
         win.layout.layout(true);
         return win;

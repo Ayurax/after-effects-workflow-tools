@@ -2,6 +2,21 @@
 // ANCHOR PRESET HELPER
 // ============================================================================
 function setAnchorPreset(mode, layerIndices) {
+    function getTargetFromPreset(preset, left, top, width, height) {
+        switch (preset) {
+            case "TL": return [left, top];
+            case "TC": return [left + width / 2, top];
+            case "TR": return [left + width, top];
+            case "CL": return [left, top + height / 2];
+            case "C":  return [left + width / 2, top + height / 2];
+            case "CR": return [left + width, top + height / 2];
+            case "BL": return [left, top + height];
+            case "BC": return [left + width / 2, top + height];
+            case "BR": return [left + width, top + height];
+            default: return null;
+        }
+    }
+
     var comp = app.project.activeItem;
     if (!comp || !(comp instanceof CompItem)) {
         return false;
@@ -35,56 +50,62 @@ function setAnchorPreset(mode, layerIndices) {
         try {
             var sourceRect = layer.sourceRectAtTime(currentTime, false);
             var left = sourceRect.left, top = sourceRect.top, width = sourceRect.width, height = sourceRect.height;
-            var offsetX, offsetY;
+            var target = getTargetFromPreset(mode, left, top, width, height);
+            if (!target) return false;
+            var targetX = target[0];
+            var targetY = target[1];
 
-            switch (mode) {
-                case "TL": offsetX = left;            offsetY = top;             break;
-                case "TC": offsetX = left + width/2;  offsetY = top;             break;
-                case "TR": offsetX = left + width;    offsetY = top;             break;
-                case "CL": offsetX = left;            offsetY = top + height/2;  break;
-                case "C":  offsetX = left + width/2;  offsetY = top + height/2;  break;
-                case "CR": offsetX = left + width;    offsetY = top + height/2;  break;
-                case "BL": offsetX = left;            offsetY = top + height;    break;
-                case "BC": offsetX = left + width/2;  offsetY = top + height;    break;
-                case "BR": offsetX = left + width;    offsetY = top + height;    break;
-                default: return false;
+            // Optional guard: if bounds collapse to a point, only proceed for center preset.
+            if (width === 0 && height === 0 && mode !== "C") {
+                $.writeln("Skipping layer with zero-size bounds for preset " + mode + ": " + layer.name);
+                continue;
             }
 
-            var currentAnchor = layer.anchorPoint.value;
-            var currentPosition = layer.position.value;
+            var anchorPropRef = layer.anchorPoint;
+            var posPropRef    = layer.position;
+            var currentAnchor   = anchorPropRef.value;
+            var currentPosition = posPropRef.value;
+            if (!currentAnchor || !currentPosition) continue;
             var is3D = layer.threeDLayer;
 
+            // sourceRect values are in layer space; compute displacement from current anchor.
+            var dx = targetX - currentAnchor[0];
+            var dy = targetY - currentAnchor[1];
+
             var newAnchor = is3D
-                ? [currentAnchor[0] + offsetX, currentAnchor[1] + offsetY, currentAnchor[2]]
-                : [currentAnchor[0] + offsetX, currentAnchor[1] + offsetY];
+                ? [targetX, targetY, currentAnchor[2]]
+                : [targetX, targetY];
             var newPosition = is3D
-                ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
-                : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
+                ? [currentPosition[0] + dx, currentPosition[1] + dy, currentPosition[2]]
+                : [currentPosition[0] + dx, currentPosition[1] + dy];
 
-            // Apply changes: use setValueAtTime if animated, otherwise setValue
-            var anchorProp = layer.anchorPoint;
-            var posProp = layer.position;
+            $.writeln("Anchor preset " + mode + " on '" + layer.name + "' -> target(" + targetX + ", " + targetY + "), delta(" + dx + ", " + dy + ")");
 
-            if (anchorProp.numKeys > 0) {
-                for (var a = 1; a <= anchorProp.numKeys; a++) {
-                    var aVal = anchorProp.keyValue(a);
+            var anchorProp = anchorPropRef;
+            var posProp    = posPropRef;
+
+            var origAnchorKeys = anchorProp.numKeys;
+            if (origAnchorKeys > 0) {
+                for (var a = 1; a <= origAnchorKeys; a++) {
+                    var aVal  = anchorProp.keyValue(a);
                     var aTime = anchorProp.keyTime(a);
                     var shiftedAnchor = is3D
-                        ? [aVal[0] + offsetX, aVal[1] + offsetY, aVal[2]]
-                        : [aVal[0] + offsetX, aVal[1] + offsetY];
+                        ? [aVal[0] + dx, aVal[1] + dy, aVal[2]]
+                        : [aVal[0] + dx, aVal[1] + dy];
                     anchorProp.setValueAtTime(aTime, shiftedAnchor);
                 }
             } else {
                 anchorProp.setValue(newAnchor);
             }
 
-            if (posProp.numKeys > 0) {
-                for (var k = 1; k <= posProp.numKeys; k++) {
-                    var kVal = posProp.keyValue(k);
+            var origPosKeys = posProp.numKeys;
+            if (origPosKeys > 0) {
+                for (var k = 1; k <= origPosKeys; k++) {
+                    var kVal  = posProp.keyValue(k);
                     var kTime = posProp.keyTime(k);
                     var shifted = is3D
-                        ? [kVal[0] + offsetX, kVal[1] + offsetY, kVal[2]]
-                        : [kVal[0] + offsetX, kVal[1] + offsetY];
+                        ? [kVal[0] + dx, kVal[1] + dy, kVal[2]]
+                        : [kVal[0] + dx, kVal[1] + dy];
                     posProp.setValueAtTime(kTime, shifted);
                 }
             } else {
@@ -326,49 +347,50 @@ function centerAnchorPoint_SelectedLayers() {
             }
 
             try {
-                // Get the source rect at current time
                 var sourceRect = layer.sourceRectAtTime(currentTime, false);
 
-                var offsetX = sourceRect.left + sourceRect.width / 2;
-                var offsetY = sourceRect.top + sourceRect.height / 2;
+                // sourceRectAtTime returns in anchor-relative space (anchor = origin).
+                // left+width/2 and top+height/2 are the displacement from anchor to content center.
+                var dx = sourceRect.left + sourceRect.width  / 2;
+                var dy = sourceRect.top  + sourceRect.height / 2;
 
-                // Cache properties to avoid repeated access
-                var anchorProp = layer.anchorPoint;
-                var posProp = layer.position;
-                var currentAnchor = anchorProp.value;
+                var anchorProp      = layer.anchorPoint;
+                var posProp         = layer.position;
+                var currentAnchor   = anchorProp.value;
                 var currentPosition = posProp.value;
+                if (!currentAnchor || !currentPosition) continue;
 
-                // Use threeDLayer property instead of checking array length
                 var is3D = layer.threeDLayer;
 
                 var newAnchor = is3D
-                    ? [currentAnchor[0] + offsetX, currentAnchor[1] + offsetY, currentAnchor[2]]
-                    : [currentAnchor[0] + offsetX, currentAnchor[1] + offsetY];
+                    ? [currentAnchor[0] + dx, currentAnchor[1] + dy, currentAnchor[2]]
+                    : [currentAnchor[0] + dx, currentAnchor[1] + dy];
                 var newPosition = is3D
-                    ? [currentPosition[0] + offsetX, currentPosition[1] + offsetY, currentPosition[2]]
-                    : [currentPosition[0] + offsetX, currentPosition[1] + offsetY];
+                    ? [currentPosition[0] + dx, currentPosition[1] + dy, currentPosition[2]]
+                    : [currentPosition[0] + dx, currentPosition[1] + dy];
 
-                // Apply changes: use setValueAtTime if animated, otherwise setValue
-                if (anchorProp.numKeys > 0) {
-                    for (var a = 1; a <= anchorProp.numKeys; a++) {
-                        var aVal = anchorProp.keyValue(a);
+                var origAnchorKeys = anchorProp.numKeys;
+                if (origAnchorKeys > 0) {
+                    for (var a = 1; a <= origAnchorKeys; a++) {
+                        var aVal  = anchorProp.keyValue(a);
                         var aTime = anchorProp.keyTime(a);
                         var shiftedAnchor = is3D
-                            ? [aVal[0] + offsetX, aVal[1] + offsetY, aVal[2]]
-                            : [aVal[0] + offsetX, aVal[1] + offsetY];
+                            ? [aVal[0] + dx, aVal[1] + dy, aVal[2]]
+                            : [aVal[0] + dx, aVal[1] + dy];
                         anchorProp.setValueAtTime(aTime, shiftedAnchor);
                     }
                 } else {
                     anchorProp.setValue(newAnchor);
                 }
 
-                if (posProp.numKeys > 0) {
-                    for (var k = 1; k <= posProp.numKeys; k++) {
-                        var kVal = posProp.keyValue(k);
+                var origPosKeys = posProp.numKeys;
+                if (origPosKeys > 0) {
+                    for (var k = 1; k <= origPosKeys; k++) {
+                        var kVal  = posProp.keyValue(k);
                         var kTime = posProp.keyTime(k);
                         var shifted = is3D
-                            ? [kVal[0] + offsetX, kVal[1] + offsetY, kVal[2]]
-                            : [kVal[0] + offsetX, kVal[1] + offsetY];
+                            ? [kVal[0] + dx, kVal[1] + dy, kVal[2]]
+                            : [kVal[0] + dx, kVal[1] + dy];
                         posProp.setValueAtTime(kTime, shifted);
                     }
                 } else {
@@ -404,8 +426,6 @@ function AE_Utility_Panel(thisObj) {
             ? thisObj
             : new Window("palette", " ", undefined, { resizeable: true });
 
-        win.minimumSize = [90, 200];
-
         win.orientation = "column";
         win.alignChildren = "fill";
         win.margins = 0;
@@ -414,8 +434,8 @@ function AE_Utility_Panel(thisObj) {
         var g = win.add("group");
         g.orientation = "column";
         g.alignChildren = "fill";
-        g.margins = 5;
-        g.spacing = 4;
+        g.margins = 8;
+        g.spacing = 6;
 
         // ---------- helpers ----------
         function getComp() {
@@ -442,10 +462,10 @@ function AE_Utility_Panel(thisObj) {
 
         function btn(group, label, tip, fn, width) {
             var b = group.add("button", undefined, label, { style:"toolbutton" });
-            var sz = width || 30;
-            b.preferredSize = [sz, 20];
-            b.minimumSize = [sz, 20];
-            b.maximumSize = [sz, 20];
+            var sz = width || 26;
+            b.preferredSize = [sz, 18];
+            b.minimumSize = [sz, 18];
+            b.maximumSize = [sz, 18];
             b.helpTip = tip;
             b.onClick = fn;
             return b;
@@ -623,12 +643,7 @@ function AE_Utility_Panel(thisObj) {
         var layerSec = addSection("Layer Ops");
         btn(layerSec.btnGroup,"De","Decompose Precomp",decomposeSelectedPrecomps_Advanced);
 
-        var layerRow2 = layerSec.section.add("group");
-        layerRow2.orientation = "row";
-        layerRow2.alignChildren = "left";
-        layerRow2.margins = 0;
-        layerRow2.spacing = 2;
-        btn(layerRow2,"PreComp","Precompose layers separately",function(){
+        btn(layerSec.btnGroup,"PreComp","Precompose layers separately",function(){
             var comp = app.project.activeItem;
             if (!(comp instanceof CompItem)) {
                 alert("Select a composition.");
@@ -668,7 +683,7 @@ function AE_Utility_Panel(thisObj) {
             }
 
             app.endUndoGroup();
-        },56);
+        });
 
         addSeparator();
 
@@ -716,9 +731,9 @@ function AE_Utility_Panel(thisObj) {
             for (var col = 0; col < 3; col++) {
                 var label = presets[row][col];
                 var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
-                b.preferredSize = [22, 22];
-                b.minimumSize = [22, 22];
-                b.maximumSize = [22, 22];
+                b.preferredSize = [18, 18];
+                b.minimumSize = [18, 18];
+                b.maximumSize = [18, 18];
 
                 (function (presetMode) {
                     b.onClick = function () {

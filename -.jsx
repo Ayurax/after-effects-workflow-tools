@@ -416,6 +416,152 @@ function centerAnchorPoint_SelectedLayers() {
 
 
 // ============================================================================
+// RESET TRANSFORMS
+// ============================================================================
+function resetLayerTransforms() {
+    var comp = app.project.activeItem;
+    if (!comp || !(comp instanceof CompItem)) return;
+
+    var sel = comp.selectedLayers;
+    if (sel.length === 0) return;
+
+    app.beginUndoGroup("AE Panel - Hard Reset Transforms");
+
+    // Helper to strip keyframes, expressions, and reset the value
+    function hardReset(prop, val) {
+        if (prop && prop.canSetExpression) {
+            // Remove all keyframes from back to front
+            while (prop.numKeys > 0) {
+                prop.removeKey(1);
+            }
+            // Clear any expressions
+            if (prop.expression !== "") prop.expression = "";
+            // Apply the default value
+            prop.setValue(val);
+        }
+    }
+
+    for (var i = 0; i < sel.length; i++) {
+        var l = sel[i];
+
+        var defaultPos = l.threeDLayer ? [comp.width/2, comp.height/2, 0] : [comp.width/2, comp.height/2];
+        hardReset(l.position, defaultPos);
+
+        var defaultScale = l.threeDLayer ? [100, 100, 100] : [100, 100];
+        hardReset(l.scale, defaultScale);
+
+        if (l.threeDLayer) {
+            hardReset(l.orientation, [0, 0, 0]);
+            hardReset(l.rotationX, 0);
+            hardReset(l.rotationY, 0);
+            hardReset(l.rotationZ, 0);
+        } else {
+            hardReset(l.rotation, 0);
+        }
+
+        hardReset(l.opacity, 100);
+    }
+    app.endUndoGroup();
+}
+
+
+function cropCompToSelection() {
+    var comp = app.project.activeItem;
+    if (!comp || !(comp instanceof CompItem)) {
+        alert("Select a composition.");
+        return;
+    }
+
+    var sel = comp.selectedLayers;
+    if (sel.length === 0) {
+        alert("Select at least one layer to define the crop region.");
+        return;
+    }
+
+    app.beginUndoGroup("AE Panel - Crop Comp");
+
+    try {
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        for (var i = 0; i < sel.length; i++) {
+            var layer = sel[i];
+            if (typeof layer.sourceRectAtTime !== "function") continue;
+
+            var rect = layer.sourceRectAtTime(comp.time, false);
+            var corners = [
+                [rect.left, rect.top],
+                [rect.left + rect.width, rect.top],
+                [rect.left, rect.top + rect.height],
+                [rect.left + rect.width, rect.top + rect.height]
+            ];
+
+            for (var j = 0; j < 4; j++) {
+                var p = layer.toComp(corners[j]);
+                if (p[0] < minX) minX = p[0];
+                if (p[1] < minY) minY = p[1];
+                if (p[0] > maxX) maxX = p[0];
+                if (p[1] > maxY) maxY = p[1];
+            }
+        }
+
+        if (minX === Infinity) throw new Error("Could not determine bounds.");
+
+        var buffer = 2;
+        minX = Math.floor(minX - buffer);
+        minY = Math.floor(minY - buffer);
+        maxX = Math.ceil(maxX + buffer);
+        maxY = Math.ceil(maxY + buffer);
+
+        var newWidth = maxX - minX;
+        var newHeight = maxY - minY;
+
+        var masterNull = comp.layers.addNull();
+        masterNull.name = "Temp_Crop_Shift";
+        var layersToUnparent = [];
+
+        for (var k = comp.numLayers; k >= 2; k--) {
+            var l = comp.layer(k);
+            if (l.parent === null) {
+                l.parent = masterNull;
+                layersToUnparent.push(l);
+            }
+        }
+
+        var currentPos = masterNull.position.value;
+        masterNull.position.setValue([currentPos[0] - minX, currentPos[1] - minY, currentPos[2]]);
+
+        for (var u = 0; u < layersToUnparent.length; u++) {
+            layersToUnparent[u].parent = null;
+        }
+        masterNull.remove();
+
+        comp.width = newWidth;
+        comp.height = newHeight;
+
+    } catch (e) {
+        alert("Error cropping comp: " + e.message);
+    } finally {
+        app.endUndoGroup();
+    }
+}
+
+function staggerSelectedLayers(framesToOffset) {
+    var comp = app.project.activeItem;
+    if (!comp || !(comp instanceof CompItem)) return;
+
+    var sel = comp.selectedLayers;
+    if (sel.length < 2) return;
+
+    app.beginUndoGroup("AE Panel - Sequence Layers");
+    var offsetTime = framesToOffset / comp.frameRate;
+
+    for (var i = 0; i < sel.length; i++) {
+        sel[i].startTime += (i * offsetTime);
+    }
+    app.endUndoGroup();
+}
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -610,6 +756,8 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         });
 
+        btn(utilSec.btnGroup,"Rst","Reset Transforms (Pos, Scale, Rot, Opacity)",resetLayerTransforms,25);
+
         addSeparator();
 
         // ===== CAMERA =====
@@ -706,14 +854,14 @@ function AE_Utility_Panel(thisObj) {
         anchorContent.margins = 0;
         anchorContent.spacing = 2;
         anchorContent.visible = false;  // Start collapsed
+        anchorContent.maximumSize = [9999, 0]; // Force 0 height when collapsed
 
-        // Toggle state
         var isExpanded = false;
 
-        // Header click handler
         anchorHeaderBtn.onClick = function() {
             isExpanded = !isExpanded;
             anchorContent.visible = isExpanded;
+            anchorContent.maximumSize = isExpanded ? [9999, 9999] : [9999, 0];
             anchorHeaderBtn.text = isExpanded ? "Anchor ▲" : "Anchor ▼";
             win.layout.layout(true);
         };
@@ -760,6 +908,113 @@ function AE_Utility_Panel(thisObj) {
                 })(label);
             }
         }
+
+        addSeparator();
+
+        // ===== TOOLS PRESETS (COLLAPSIBLE) =====
+        var toolsSec = g.add("group");
+        toolsSec.orientation = "column";
+        toolsSec.alignChildren = "fill";
+        toolsSec.margins = 0;
+        toolsSec.spacing = 3;
+
+        var toolsHeaderBtn = toolsSec.add("button", undefined, "Tools ▼");
+        toolsHeaderBtn.preferredSize = [undefined, 18];
+        toolsHeaderBtn.helpTip = "Toggle Advanced Tools";
+
+        var toolsContent = toolsSec.add("group");
+        toolsContent.orientation = "column"; // Changed to column to hold multiple rows
+        toolsContent.alignChildren = "left";
+        toolsContent.margins = 0;
+        toolsContent.spacing = 2;
+        toolsContent.visible = false;
+        toolsContent.maximumSize = [9999, 0];
+
+        var isToolsExpanded = false;
+
+        toolsHeaderBtn.onClick = function() {
+            isToolsExpanded = !isToolsExpanded;
+            toolsContent.visible = isToolsExpanded;
+            toolsContent.maximumSize = isToolsExpanded ? [9999, 9999] : [9999, 0];
+            toolsHeaderBtn.text = isToolsExpanded ? "Tools ▲" : "Tools ▼";
+            win.layout.layout(true);
+        };
+
+        // --- ROW 1: Basic Tools ---
+        var tRow1 = toolsContent.add("group");
+        tRow1.orientation = "row";
+        tRow1.spacing = 2;
+        btn(tRow1, "Crop", "Crop Comp to Bounding Box", cropCompToSelection, 35);
+        btn(tRow1, "Seq", "Sequence / Stagger Layers", function(){ staggerSelectedLayers(2); }, 30);
+
+        // --- ROW 2: Custom Script Launcher ---
+        var tRow2 = toolsContent.add("group");
+        tRow2.orientation = "row";
+        tRow2.spacing = 2;
+
+        // Load saved tools from AE preferences
+        var myFavs = [];
+        if (app.settings.haveSetting("MyAEPanel", "FavTools")) {
+            myFavs = app.settings.getSetting("MyAEPanel", "FavTools").split("||");
+        } else {
+            myFavs = ["Menu:Align", "Menu:Character"]; // Defaults
+        }
+
+        var ddLauncher = tRow2.add("dropdownlist", undefined, myFavs);
+        if (ddLauncher.items.length > 0) ddLauncher.selection = 0;
+        ddLauncher.preferredSize.width = 80;
+
+        function saveLauncherSettings() {
+            var arr = [];
+            for(var i=0; i<ddLauncher.items.length; i++) arr.push(ddLauncher.items[i].text);
+            app.settings.saveSetting("MyAEPanel", "FavTools", arr.join("||"));
+        }
+
+        btn(tRow2, "▶", "Run Selected Tool", function(){
+            if (!ddLauncher.selection) return;
+            var sel = ddLauncher.selection.text;
+            app.beginUndoGroup("AE Panel - Launch");
+
+            if (sel.indexOf("Menu:") === 0) {
+                var cmd = sel.substring(5);
+                var id = app.findMenuCommandId(cmd);
+                if (id) app.executeCommand(id);
+                else alert("Could not find Menu Command: " + cmd);
+            } else if (sel.indexOf("File:") === 0) {
+                var f = new File(sel.substring(5));
+                if (f.exists) $.evalFile(f);
+                else alert("Could not find script file:\n" + f.fsName);
+            }
+
+            app.endUndoGroup();
+        }, 20);
+
+        btn(tRow2, "+", "Add Script or Plugin", function(){
+            var type = confirm("Click YES to add a Menu Plugin (e.g. 'Align', 'Duik').\nClick NO to browse for a Script File (.jsx).");
+            if (type) {
+                var cmd = prompt("Enter exact Menu Command name:", "Align");
+                if (cmd) {
+                    ddLauncher.add("item", "Menu:" + cmd);
+                    ddLauncher.selection = ddLauncher.items.length - 1;
+                    saveLauncherSettings();
+                }
+            } else {
+                var f = File.openDialog("Select a Script", "*.jsx;*.jsxbin");
+                if (f) {
+                    ddLauncher.add("item", "File:" + f.fsName);
+                    ddLauncher.selection = ddLauncher.items.length - 1;
+                    saveLauncherSettings();
+                }
+            }
+        }, 20);
+
+        btn(tRow2, "-", "Remove Selected", function(){
+            if (ddLauncher.selection && ddLauncher.items.length > 0) {
+                ddLauncher.remove(ddLauncher.selection);
+                if(ddLauncher.items.length > 0) ddLauncher.selection = 0;
+                saveLauncherSettings();
+            }
+        }, 20);
 
         win.layout.layout(true);
         return win;

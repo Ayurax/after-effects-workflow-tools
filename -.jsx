@@ -61,37 +61,31 @@ function setAnchorPreset(mode, layerIndices) {
                 continue;
             }
 
+            var is3D = layer.threeDLayer;
             var anchorPropRef = layer.anchorPoint;
-            var posPropRef    = layer.position;
-            var currentAnchor   = anchorPropRef.value;
+            var posPropRef = layer.position;
+            var currentAnchor = anchorPropRef.value;
             var currentPosition = posPropRef.value;
             if (!currentAnchor || !currentPosition) continue;
-            var is3D = layer.threeDLayer;
 
-            // sourceRect values are in layer space; compute displacement from current anchor.
-            var dx = targetX - currentAnchor[0];
-            var dy = targetY - currentAnchor[1];
+            var deltaX = targetX - currentAnchor[0];
+            var deltaY = targetY - currentAnchor[1];
 
             var newAnchor = is3D
                 ? [targetX, targetY, currentAnchor[2]]
                 : [targetX, targetY];
-            var newPosition = is3D
-                ? [currentPosition[0] + dx, currentPosition[1] + dy, currentPosition[2]]
-                : [currentPosition[0] + dx, currentPosition[1] + dy];
-
-            $.writeln("Anchor preset " + mode + " on '" + layer.name + "' -> target(" + targetX + ", " + targetY + "), delta(" + dx + ", " + dy + ")");
 
             var anchorProp = anchorPropRef;
-            var posProp    = posPropRef;
+            var posProp = posPropRef;
 
             var origAnchorKeys = anchorProp.numKeys;
             if (origAnchorKeys > 0) {
                 for (var a = 1; a <= origAnchorKeys; a++) {
-                    var aVal  = anchorProp.keyValue(a);
+                    var aVal = anchorProp.keyValue(a);
                     var aTime = anchorProp.keyTime(a);
                     var shiftedAnchor = is3D
-                        ? [aVal[0] + dx, aVal[1] + dy, aVal[2]]
-                        : [aVal[0] + dx, aVal[1] + dy];
+                        ? [aVal[0] + deltaX, aVal[1] + deltaY, aVal[2]]
+                        : [aVal[0] + deltaX, aVal[1] + deltaY];
                     anchorProp.setValueAtTime(aTime, shiftedAnchor);
                 }
             } else {
@@ -101,15 +95,17 @@ function setAnchorPreset(mode, layerIndices) {
             var origPosKeys = posProp.numKeys;
             if (origPosKeys > 0) {
                 for (var k = 1; k <= origPosKeys; k++) {
-                    var kVal  = posProp.keyValue(k);
+                    var kVal = posProp.keyValue(k);
                     var kTime = posProp.keyTime(k);
                     var shifted = is3D
-                        ? [kVal[0] + dx, kVal[1] + dy, kVal[2]]
-                        : [kVal[0] + dx, kVal[1] + dy];
+                        ? [kVal[0] + deltaX, kVal[1] + deltaY, kVal[2]]
+                        : [kVal[0] + deltaX, kVal[1] + deltaY];
                     posProp.setValueAtTime(kTime, shifted);
                 }
             } else {
-                posProp.setValue(newPosition);
+                posProp.setValue(is3D
+                    ? [currentPosition[0] + deltaX, currentPosition[1] + deltaY, currentPosition[2]]
+                    : [currentPosition[0] + deltaX, currentPosition[1] + deltaY]);
             }
 
             successCount++;
@@ -389,11 +385,14 @@ function centerAnchorPoint_SelectedLayers() {
                         var kVal  = posProp.keyValue(k);
                         var kTime = posProp.keyTime(k);
                         var shifted = is3D
-                            ? [kVal[0] + dx, kVal[1] + dy, kVal[2]]
+                            ? [kVal[0] + dx, kVal[1] + dy, kVal[2] + dz]
                             : [kVal[0] + dx, kVal[1] + dy];
                         posProp.setValueAtTime(kTime, shifted);
                     }
                 } else {
+                    var newPosition = is3D
+                        ? [currentPosition[0] + dx, currentPosition[1] + dy, currentPosition[2] + dz]
+                        : [currentPosition[0] + dx, currentPosition[1] + dy];
                     posProp.setValue(newPosition);
                 }
 
@@ -471,7 +470,7 @@ function cropCompToSelection() {
         alert("Select a composition.");
         return;
     }
-
+    
     var sel = comp.selectedLayers;
     if (sel.length === 0) {
         alert("Select at least one layer to define the crop region.");
@@ -488,25 +487,34 @@ function cropCompToSelection() {
             if (typeof layer.sourceRectAtTime !== "function") continue;
 
             var rect = layer.sourceRectAtTime(comp.time, false);
-            var corners = [
-                [rect.left, rect.top],
-                [rect.left + rect.width, rect.top],
-                [rect.left, rect.top + rect.height],
-                [rect.left + rect.width, rect.top + rect.height]
-            ];
+            var s = layer.scale.value;
+            var p = layer.position.value;
+            var a = layer.anchorPoint.value;
 
-            for (var j = 0; j < 4; j++) {
-                var p = layer.toComp(corners[j]);
-                if (p[0] < minX) minX = p[0];
-                if (p[1] < minY) minY = p[1];
-                if (p[0] > maxX) maxX = p[0];
-                if (p[1] > maxY) maxY = p[1];
-            }
+            var scaleX = s[0] / 100;
+            var scaleY = s[1] / 100;
+
+            // Manually calculate comp-space bounds
+            var left = p[0] + (rect.left - a[0]) * scaleX;
+            var right = p[0] + (rect.left + rect.width - a[0]) * scaleX;
+            var top = p[1] + (rect.top - a[1]) * scaleY;
+            var bottom = p[1] + (rect.top + rect.height - a[1]) * scaleY;
+
+            // Handle flipped scales
+            var trueLeft = Math.min(left, right);
+            var trueRight = Math.max(left, right);
+            var trueTop = Math.min(top, bottom);
+            var trueBottom = Math.max(top, bottom);
+
+            if (trueLeft < minX) minX = trueLeft;
+            if (trueTop < minY) minY = trueTop;
+            if (trueRight > maxX) maxX = trueRight;
+            if (trueBottom > maxY) maxY = trueBottom;
         }
 
         if (minX === Infinity) throw new Error("Could not determine bounds.");
 
-        var buffer = 2;
+        var buffer = 2; 
         minX = Math.floor(minX - buffer);
         minY = Math.floor(minY - buffer);
         maxX = Math.ceil(maxX + buffer);
@@ -514,6 +522,10 @@ function cropCompToSelection() {
 
         var newWidth = maxX - minX;
         var newHeight = maxY - minY;
+
+        if (newWidth <= 0 || newHeight <= 0 || newWidth > 30000 || newHeight > 30000) {
+            throw new Error("Invalid crop dimensions calculated.");
+        }
 
         var masterNull = comp.layers.addNull();
         masterNull.name = "Temp_Crop_Shift";
@@ -545,19 +557,25 @@ function cropCompToSelection() {
     }
 }
 
-function staggerSelectedLayers(framesToOffset) {
+function sequenceSelectedLayers() {
     var comp = app.project.activeItem;
     if (!comp || !(comp instanceof CompItem)) return;
-
+    
     var sel = comp.selectedLayers;
     if (sel.length < 2) return;
-
+    
     app.beginUndoGroup("AE Panel - Sequence Layers");
-    var offsetTime = framesToOffset / comp.frameRate;
-
-    for (var i = 0; i < sel.length; i++) {
-        sel[i].startTime += (i * offsetTime);
+    
+    // Set the time tracker to the end of the very first layer
+    var nextTime = sel[0].outPoint;
+    
+    for (var i = 1; i < sel.length; i++) {
+        var l = sel[i];
+        var inOffset = l.inPoint - l.startTime; // Account for trimmed layers
+        l.startTime = nextTime - inOffset;
+        nextTime = l.outPoint;
     }
+    
     app.endUndoGroup();
 }
 
@@ -945,7 +963,7 @@ function AE_Utility_Panel(thisObj) {
         tRow1.orientation = "row";
         tRow1.spacing = 2;
         btn(tRow1, "Crop", "Crop Comp to Bounding Box", cropCompToSelection, 35);
-        btn(tRow1, "Seq", "Sequence / Stagger Layers", function(){ staggerSelectedLayers(2); }, 30);
+        btn(tRow1, "Seq", "Sequence Layers End-to-End", sequenceSelectedLayers, 30);
 
         // --- ROW 2: Custom Script Launcher ---
         var tRow2 = toolsContent.add("group");

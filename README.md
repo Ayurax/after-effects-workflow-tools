@@ -1,33 +1,53 @@
-# 🎬 AE Utility Panel Script
+⚡ After Effects Workflow Tools
 
-A powerful **Adobe After Effects ScriptUI panel** that speeds up everyday workflows with utilities for anchor control, layer management, precomposing, camera rigs, and more.
+⏱️ Save hours of repetitive work in After Effects with powerful one-click tools.
+
+A ScriptUI panel designed to speed up motion design workflows — from anchor control to advanced precomp handling and camera rigs.
 
 ---
 
-## ✨ Features
+## 🎥 Demo
+<!-- Replace with your GIF -->
+> See how repetitive tasks are reduced to a single click
+
+---
+
+## 🚀 Why use this?
+
+After Effects workflows often involve repetitive, time-consuming steps.
+
+This tool eliminates that.
+
+👉 What used to take minutes → now takes seconds  
+👉 Complex setups → done in one click  
+
+---
+
+## 🔥 Key Features
 
 ### 🧭 Anchor Tools
-- 3×3 Anchor Preset Grid (TL, TC, TR, etc.)
-- Center Anchor Point (accurate with `sourceRectAtTime`)
+- 3×3 anchor positioning grid (TL, TC, TR, etc.)
+- True center anchor using `sourceRectAtTime`
 - Works with:
   - 2D & 3D layers
-  - Animated keyframes (preserves animation)
+  - Animated layers (preserves keyframes)
 
 ---
 
-### 🧩 Layer Utilities
-- **Decompose Precomp (Advanced)**
+### 🧩 Advanced Layer Utilities
+- **Decompose Precomp (Smart System)**
   - Preserves:
-    - Timing (including stretch & time remap)
+    - Timing (stretch, remap, in/out points)
     - Parenting
     - Track mattes
-    - Blending modes & layer properties
+    - Blending modes
 - **Precompose Layers Separately**
-- Maintains original timing after operations
+- Keeps everything perfectly aligned in timeline
 
 ---
 
-### ⚡ Quick Create Tools
+### ⚡ Quick Create
+Create essential layers instantly:
 - Null Object  
 - Adjustment Layer  
 - Solid (with color picker 🎨)  
@@ -35,93 +55,92 @@ A powerful **Adobe After Effects ScriptUI panel** that speeds up everyday workfl
 
 ---
 
-### 🛠 Utilities
+### 🛠 Workflow Utilities
 - **1-Frame Adjustment Layer**
-- **Align Keyframes**
-  - Automatically spaces selected keyframes frame-by-frame
+- **Align Keyframes Automatically**
+  - Evenly distributes selected keyframes frame-by-frame
 
 ---
 
-### 🎥 Camera Rig
-- One-click:
-  - Camera creation
-  - Controller null setup
-  - Auto timing based on selected layers
+### 🎥 One-Click Camera Rig
+- Creates camera + control null
+- Automatically sets up hierarchy
+- Adapts to selected layers
 
 ---
 
-## 📦 Installation
+## 🚀 Installation
 
-1. Download the script file (`.jsx`)
+1. Download the `.jsx` file  
 2. Place it in:
 
 Adobe After Effects > Support Files > Scripts > ScriptUI Panels
 
 3. Restart After Effects  
-4. Open via:
+4. Open:
 
 Window > AE Utility Panel
 
+
 ---
 
-## 🚀 Usage
+## ⚡ How to Use
 
-- Select layers (if required)
-- Click buttons in the panel
+1. Select layers (if required)  
+2. Open the panel  
+3. Click any tool  
 
-Most tools support:
-- Multiple layers  
-- Animated properties  
-- Undo (grouped actions)  
+✔ Supports multiple layers  
+✔ Works with animations  
+✔ Fully undoable (grouped actions)
 
 ---
 
 ## 🧠 How It Works
 
-### Anchor Presets
-Uses `sourceRectAtTime()` to calculate layer bounds and reposition anchor points without visually shifting the layer.
-
-### Decompose System
-- Copies layers from precomp to main comp  
-- Maps time using:
-  - `displayStartTime`
-  - `stretch`
-  - `timeRemap`
-  - `inPoint`
-- Rebuilds parenting relationships safely  
+- Uses `sourceRectAtTime()` for accurate anchor calculations  
+- Smart time mapping system for precomp decomposition  
+- Safely rebuilds parenting and layer relationships  
 
 ---
 
-## ⚠️ Notes / Limitations
+## ⚠️ Limitations
 
-- Some layer types may not support `sourceRectAtTime`
-- Certain effects or expressions may not transfer perfectly during decomposition
-- Works best with standard AE layer types
+- Some layer types may not support certain calculations  
+- Complex expressions may not fully transfer  
+- Best used with standard AE workflows  
 
 ---
 
 ## 🛠 Requirements
 
-- Adobe After Effects (modern versions)
-- ScriptUI enabled
+- Adobe After Effects (modern versions)  
+- ScriptUI enabled  
 
 ---
 
-## 📌 Future Improvements
+## 🚀 Future Plans
 
 - Batch processing tools  
 - Expression utilities  
-- Better error reporting UI  
-- Preset saving  
+- Preset system  
+- Improved UI/UX  
 
 ---
 
 ## 🤝 Contributing
 
-Feel free to fork and improve:
+Want to improve this?
+
+- Fork the repo  
 - Add features  
 - Optimize performance  
-- Improve UI/UX  
+
+---
+
+## ⭐ Support
+
+If this saved you time, consider starring the repo — it helps a lot.
 
 ---
 

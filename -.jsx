@@ -281,7 +281,7 @@ function decomposeSelectedPrecomps_Advanced() {
 
         // UI REFRESH: Force refresh every 5 iterations to prevent UI freeze
         if (t % 5 === 0) {
-            app.refresh();
+            try { app.refresh(); } catch(e) {}
         }
 
         // ===================================================
@@ -655,74 +655,44 @@ function cropCompToSelection() {
         var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         var validLayersFound = 0;
 
-        // IMPROVED: Handle rotation and edge cases by converting all 4 corners to comp space
+        // IMPROVED: Simple and reliable bounds calculation using position, anchor, and scale
         for (var i = 0; i < sel.length; i++) {
             var layer = sel[i];
-
-            // PROGRESS: Update progress bar every layer
-            updateProgress(i + 1, sel.length, "Calculating bounds");
-
-            // UI REFRESH: Force refresh every 3 layers to prevent UI freeze during large crops
-            if (i % 3 === 0) {
-                app.refresh();
-            }
-
-            // SAFETY: Skip layers that don't support sourceRectAtTime
-            if (typeof layer.sourceRectAtTime !== "function") {
-                $.writeln("Skipping layer '" + layer.name + "': sourceRectAtTime not supported");
-                continue;
-            }
-
-            // SAFETY: Skip invisible layers (optional but prevents unexpected results)
-            if (!layer.enabled) {
-                $.writeln("Skipping disabled layer '" + layer.name + "'");
-                continue;
-            }
+            if (!layer.enabled) continue;
 
             try {
+                // Get layer position in comp space
+                var pos = layer.position.value;
+                var anchor = layer.anchorPoint.value;
+
+                // Get source rect in layer local space
                 var rect = layer.sourceRectAtTime(comp.time, false);
+                if (!rect) continue;
 
-                // Guard against invalid rectangles
-                if (!rect || rect.width <= 0 || rect.height <= 0) {
-                    $.writeln("Skipping layer '" + layer.name + "': invalid source rect");
-                    continue;
-                }
+                // Get scale values (as percentage, convert to ratio)
+                var scaleVal = layer.scale.value;
+                var scaleX = scaleVal[0] / 100;
+                var scaleY = scaleVal[1] / 100;
 
-                // Get transform properties
-                var a = layer.anchorPoint.value;
+                // Calculate actual bounds in comp space
+                // accounting for anchor, position and scale
+                var left   = pos[0] - (anchor[0] - rect.left)  * scaleX;
+                var top    = pos[1] - (anchor[1] - rect.top)   * scaleY;
+                var right  = left + rect.width  * scaleX;
+                var bottom = top  + rect.height * scaleY;
 
-                if (!a) continue;
+                if (!isFinite(left) || !isFinite(top) ||
+                    !isFinite(right) || !isFinite(bottom)) continue;
 
-                // Define the 4 corners in layer space (relative to anchor point)
-                var corners = [
-                    [rect.left - a[0], rect.top - a[1]],
-                    [rect.left + rect.width - a[0], rect.top - a[1]],
-                    [rect.left + rect.width - a[0], rect.top + rect.height - a[1]],
-                    [rect.left - a[0], rect.top + rect.height - a[1]]
-                ];
-
-                // Convert each corner to comp space (handles rotation, scale, position, 3D)
-                for (var c = 0; c < corners.length; c++) {
-                    var layerPt = corners[c];
-                    // Use toComp to convert to composition space (handles all transforms including rotation)
-                    var compPt = layer.toComp([layerPt[0], layerPt[1], 0]);
-
-                    // GUARD: Skip invalid coordinate (NaN or Infinity)
-                    if (isNaN(compPt[0]) || isNaN(compPt[1]) || !isFinite(compPt[0]) || !isFinite(compPt[1])) {
-                        continue;
-                    }
-
-                    if (compPt[0] < minX) minX = compPt[0];
-                    if (compPt[0] > maxX) maxX = compPt[0];
-                    if (compPt[1] < minY) minY = compPt[1];
-                    if (compPt[1] > maxY) maxY = compPt[1];
-                }
+                if (left   < minX) minX = left;
+                if (right  > maxX) maxX = right;
+                if (top    < minY) minY = top;
+                if (bottom > maxY) maxY = bottom;
 
                 validLayersFound++;
 
-            } catch (layerError) {
-                // Log error but continue processing other layers
-                $.writeln("Error processing layer '" + layer.name + "': " + layerError.message);
+            } catch(e) {
+                $.writeln("Error on layer " + layer.name + ": " + e.message);
                 continue;
             }
         }
@@ -978,7 +948,7 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
             app.beginUndoGroup("AE Panel - Text Anchor");
             $.sleep(200);
-            app.refresh();
+            try { app.refresh(); } catch(e) {}
 
             try {
                 var rect = t.sourceRectAtTime(c.time, false);
@@ -1158,7 +1128,7 @@ function AE_Utility_Panel(thisObj) {
                 // UI REFRESH: Update progress and refresh UI every layer
                 updateProgress(i + 1, sel.length, "Aligning Time Remap");
                 if (i % 3 === 0) {
-                    app.refresh();
+                    try { app.refresh(); } catch(e) {}
                 }
 
                 try {

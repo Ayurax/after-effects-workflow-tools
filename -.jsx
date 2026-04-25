@@ -950,25 +950,8 @@ function AE_Utility_Panel(thisObj) {
             var c = AE.requireComp();
             if (!c) return;
             app.beginUndoGroup("AE Panel - Solid");
-            var s = c.layers.addSolid(
-                [0.5, 0.5, 0.5],
-                "Solid",
-                c.width,
-                c.height,
-                c.pixelAspect
-            );
-            s.label = 8;
-            var prevLayer = c.selectedLayers.length ? c.selectedLayers[0] : null;
-            if (prevLayer) {
-                s.startTime = prevLayer.startTime;
-                s.inPoint   = prevLayer.inPoint;
-                s.outPoint  = prevLayer.outPoint;
-                s.moveBefore(prevLayer);
-            } else {
-                s.startTime = c.workAreaStart;
-                s.inPoint   = c.workAreaStart;
-                s.outPoint  = c.workAreaStart + Math.max(c.workAreaDuration, c.frameDuration);
-            }
+            var countBefore = c.numLayers;
+            app.executeCommand(2038);
             app.endUndoGroup();
         }, 38);
 

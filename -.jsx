@@ -912,7 +912,12 @@ function AE_Utility_Panel(thisObj) {
         btn(createRow,"Null","Create a null object for parenting and control", function(){
             perSelection(function(c,l){
                 var n=c.layers.addNull(); n.label=1;
-                if(l){n.startTime=l.startTime;n.inPoint=l.inPoint;n.outPoint=l.outPoint;n.moveBefore(l);}
+                if(l){
+                    n.startTime=l.startTime;n.inPoint=l.inPoint;n.outPoint=l.outPoint;n.moveBefore(l);
+                    if(l.threeDLayer===true) n.threeDLayer=true;
+                    n.parent=l;
+                    try { n.position.setValue(l.position.value); } catch (e) {}
+                }
             },true);
         }, 38);
 

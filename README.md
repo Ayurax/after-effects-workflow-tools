@@ -1,136 +1,149 @@
-# 🎬 AE Utility Panel
+⚡ After Effects Workflow Tools
 
-![After Effects](https://img.shields.io/badge/Adobe%20After%20Effects-ScriptUI-purple)
-![Platform](https://img.shields.io/badge/Platform-After%20Effects-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
+⏱️ Save hours of repetitive work in After Effects with powerful one-click tools.
 
-A compact **Adobe After Effects ScriptUI panel** that provides quick-access tools for common workflow tasks such as **layer creation, camera rigs, keyframe alignment, and precomp utilities**.
-
-Designed to **speed up daily compositing workflows** inside After Effects.
+A ScriptUI panel designed to speed up motion design workflows — from anchor control to advanced precomp handling and camera rigs.
 
 ---
 
-## ✨ Features
-
-### 🎨 Layer Creation
-
-* **Null** → Quickly create a null aligned with selected layer timing
-* **ADJ** → Create adjustment layers instantly
-* **Solid** → Create solids using the color picker
-* **Text** → Add text layers quickly
+## 🎥 Demo
+<!-- Replace with your GIF -->
+> See how repetitive tasks are reduced to a single click
 
 ---
 
-### ⚡ Quick Utilities
+## 🚀 Why use this?
 
-* **1f** → Create a **1-frame adjustment layer** at the playhead
-* **Cam** → Generate a **camera + controller rig automatically**
+After Effects workflows often involve repetitive, time-consuming steps.
 
----
+This tool eliminates that.
 
-### ⏱ Keyframe Tools
-
-* **AK (Align Keys)**
-  Align selected keyframes sequentially by frame.
-
-Perfect for:
-
-* stop motion animation
-* frame-by-frame edits
-* timing fixes
+👉 What used to take minutes → now takes seconds  
+👉 Complex setups → done in one click  
 
 ---
 
-### 🧩 Composition Tools
+## 🔥 Key Features
 
-* **PreComp**
-  Precompose selected layers **individually while preserving timing**
-
-* **De (Decompose Precomp)**
-  Break a precomp back into its original layers in the main composition.
-
----
-
-## 📸 Panel Preview
-
-*(Add a screenshot or GIF here)*
-
-Example:
-
-```
-![Panel](preview.png)
-```
-
-A short GIF demonstration will make the repo much more attractive.
+### 🧭 Anchor Tools
+- 3×3 anchor positioning grid (TL, TC, TR, etc.)
+- True center anchor using `sourceRectAtTime`
+- Works with:
+  - 2D & 3D layers
+  - Animated layers (preserves keyframes)
 
 ---
 
-## 📦 Installation
-
-1. Download the `.jsx` script file.
-
-2. Copy it into:
-
-```
-After Effects / Support Files / Scripts / ScriptUI Panels
-```
-
-Example:
-
-```
-C:\Program Files\Adobe\Adobe After Effects\Support Files\Scripts\ScriptUI Panels
-```
-
-3. Restart **Adobe After Effects**
-
-4. Open the panel from:
-
-```
-Window → AE Utility Panel
-```
+### 🧩 Advanced Layer Utilities
+- **Decompose Precomp (Smart System)**
+  - Preserves:
+    - Timing (stretch, remap, in/out points)
+    - Parenting
+    - Track mattes
+    - Blending modes
+- **Precompose Layers Separately**
+- Keeps everything perfectly aligned in timeline
 
 ---
 
-## 🚀 Usage
-
-1. Open a composition
-2. Select layers (optional depending on tool)
-3. Click a button in the panel
-
-Most tools automatically match the **timing of selected layers**.
-
----
-
-## 🧠 Why this tool?
-
-After Effects workflows often require repetitive tasks like:
-
-* creating adjustment layers
-* aligning keyframes
-* setting up cameras
-* precomposing layers
-
-This panel brings **all those utilities into one small UI**.
+### ⚡ Quick Create
+Create essential layers instantly:
+- Null Object  
+- Adjustment Layer  
+- Solid (with color picker 🎨)  
+- Text Layer  
 
 ---
 
-## 🛠 Built With
-
-* **ExtendScript**
-* **After Effects ScriptUI**
-
----
-
-## 👤 Author
-
-**Raj**
-
-GitHub: https://github.com/Ayurax
+### 🛠 Workflow Utilities
+- **1-Frame Adjustment Layer**
+- **Align Keyframes Automatically**
+  - Evenly distributes selected keyframes frame-by-frame
 
 ---
 
-## 📜 License
+### 🎥 One-Click Camera Rig
+- Creates camera + control null
+- Automatically sets up hierarchy
+- Adapts to selected layers
+
+---
+
+## 🚀 Installation
+
+1. Download the `.jsx` file  
+2. Place it in:
+
+Adobe After Effects > Support Files > Scripts > ScriptUI Panels
+
+3. Restart After Effects  
+4. Open:
+
+Window > AE Utility Panel
+
+
+---
+
+## ⚡ How to Use
+
+1. Select layers (if required)  
+2. Open the panel  
+3. Click any tool  
+
+✔ Supports multiple layers  
+✔ Works with animations  
+✔ Fully undoable (grouped actions)
+
+---
+
+## 🧠 How It Works
+
+- Uses `sourceRectAtTime()` for accurate anchor calculations  
+- Smart time mapping system for precomp decomposition  
+- Safely rebuilds parenting and layer relationships  
+
+---
+
+## ⚠️ Limitations
+
+- Some layer types may not support certain calculations  
+- Complex expressions may not fully transfer  
+- Best used with standard AE workflows  
+
+---
+
+## 🛠 Requirements
+
+- Adobe After Effects (modern versions)  
+- ScriptUI enabled  
+
+---
+
+## 🚀 Future Plans
+
+- Batch processing tools  
+- Expression utilities  
+- Preset system  
+- Improved UI/UX  
+
+---
+
+## 🤝 Contributing
+
+Want to improve this?
+
+- Fork the repo  
+- Add features  
+- Optimize performance  
+
+---
+
+## ⭐ Support
+
+If this saved you time, consider starring the repo — it helps a lot.
+
+---
+
+## 📄 License
 
 MIT License
-
-Feel free to use, modify, and improve the script.

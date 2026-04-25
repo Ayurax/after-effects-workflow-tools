@@ -799,7 +799,7 @@ function sequenceSelectedLayers() {
     // Sort layers by index to ensure proper sequencing order
     var selArray = [];
     for (var i = 0; i < sel.length; i++) selArray.push(sel[i]);
-    selArray.sort(function(a, b) { return a.index - b.index; });
+    selArray.sort(function(a, b) { return b.index - a.index; });
 
     app.beginUndoGroup("AE Panel - Sequence Layers");
 

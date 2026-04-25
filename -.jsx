@@ -1084,96 +1084,9 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         }, 70);
 
-        addSeparator();
-
-        // ===== TRANSFORM (COLLAPSIBLE) =====
-        var resetSec = g.add("group");
-        resetSec.orientation = "column";
-        resetSec.alignChildren = "fill";
-        resetSec.margins = 0;
-        resetSec.spacing = 4;
-
-        var resetHeaderBtn = resetSec.add("button", undefined, "Transform Reset ▼");
-        resetHeaderBtn.preferredSize = [undefined, 20];
-        resetHeaderBtn.helpTip = "Reset individual transform properties or all at once";
-
-        var resetContent = resetSec.add("group");
-        resetContent.orientation = "column";
-        resetContent.alignChildren = "left";
-        resetContent.margins = 0;
-        resetContent.spacing = 2;
-        resetContent.visible = false;
-        resetContent.maximumSize = [9999, 0];
-
-        var isResetExpanded = false;
-
-        resetHeaderBtn.onClick = function() {
-            isResetExpanded = !isResetExpanded;
-            resetContent.visible = isResetExpanded;
-            resetContent.maximumSize = isResetExpanded ? [9999, 9999] : [9999, 0];
-            resetHeaderBtn.text = isResetExpanded ? "Transform Reset ▲" : "Transform Reset ▼";
-            win.layout.layout(true);
-        };
-
-        var resetRow = resetContent.add("group");
-        resetRow.orientation = "row";
-        resetRow.alignChildren = "left";
-        resetRow.margins = 0;
-        resetRow.spacing = 3;
-
-        btn(resetRow, "Position", "Reset position to center of composition", function(){
-            var c = AE.requireComp(); if(!c) return;
-            var sel = c.selectedLayers; if(sel.length === 0) return;
-            app.beginUndoGroup("AE Panel - Reset Position");
-            for (var i = 0; i < sel.length; i++) {
-                var l = sel[i];
-                hardReset(l.position, TransformDefaults.position(l, c));
-            }
-            app.endUndoGroup();
-        }, 50);
-
-        btn(resetRow, "Scale", "Reset scale to 100% (unscaled)", function(){
-            var c = AE.requireComp(); if(!c) return;
-            var sel = c.selectedLayers; if(sel.length === 0) return;
-            app.beginUndoGroup("AE Panel - Reset Scale");
-            for (var i = 0; i < sel.length; i++) {
-                var l = sel[i];
-                hardReset(l.scale, TransformDefaults.scale(l));
-            }
-            app.endUndoGroup();
-        }, 45);
-
-        btn(resetRow, "Rotation", "Reset rotation to 0 degrees (unrotated)", function(){
-            var c = AE.requireComp(); if(!c) return;
-            var sel = c.selectedLayers; if(sel.length === 0) return;
-            app.beginUndoGroup("AE Panel - Reset Rotation");
-            for (var i = 0; i < sel.length; i++) {
-                var l = sel[i];
-                if (l.threeDLayer) {
-                    hardReset(l.orientation, TransformDefaults.rotation(l));
-                    hardReset(l.rotationX, 0);
-                    hardReset(l.rotationY, 0);
-                    hardReset(l.rotationZ, 0);
-                } else {
-                    hardReset(l.rotation, TransformDefaults.rotation(l));
-                }
-            }
-            app.endUndoGroup();
-        }, 50);
-
-        btn(resetRow, "Opacity", "Reset opacity to 100% (fully opaque)", function(){
-            var c = AE.requireComp(); if(!c) return;
-            var sel = c.selectedLayers; if(sel.length === 0) return;
-            app.beginUndoGroup("AE Panel - Reset Opacity");
-            for (var i = 0; i < sel.length; i++) {
-                hardReset(sel[i].opacity, 100);
-            }
-            app.endUndoGroup();
-        }, 50);
-
-        btn(resetRow, "Reset All", "Reset all: position, scale, rotation, and opacity", function(){
+        btn(utilSec.btnGroup, "Reset", "Reset all transforms: position, scale, rotation and opacity", function(){
             resetLayerTransforms();
-        }, 55);
+        }, 38);
 
         addSeparator();
 

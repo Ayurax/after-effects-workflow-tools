@@ -913,10 +913,27 @@ function AE_Utility_Panel(thisObj) {
             perSelection(function(c,l){
                 var n=c.layers.addNull(); n.label=1;
                 if(l){
-                    n.startTime=l.startTime;n.inPoint=l.inPoint;n.outPoint=l.outPoint;n.moveBefore(l);
+                    try {
+                        var layerIn=Math.min(l.inPoint,l.outPoint);
+                        var layerOut=Math.max(l.inPoint,l.outPoint);
+                        if(!isFinite(layerIn)||!isFinite(layerOut)||layerOut<=layerIn) throw new Error("Invalid layer timing");
+                        n.startTime=Math.min(l.startTime,layerIn);
+                        n.inPoint=layerIn;
+                        n.outPoint=layerOut;
+                    } catch (timingErr) {
+                        n.startTime=c.workAreaStart;
+                        n.inPoint=c.workAreaStart;
+                        n.outPoint=c.workAreaStart+c.workAreaDuration;
+                    }
+                    n.moveBefore(l);
                     if(l.threeDLayer===true) n.threeDLayer=true;
-                    n.parent=l;
-                    try { n.position.setValue(l.position.value); } catch (e) {}
+                    try {
+                        var worldPos=l.toWorld(l.anchorPoint.value);
+                        n.position.setValue(l.threeDLayer ? [worldPos[0], worldPos[1], worldPos[2]] : [worldPos[0], worldPos[1]]);
+                    } catch (e) {
+                        try { n.position.setValue(l.position.value); } catch (e2) {}
+                    }
+                    l.parent=n;
                 }
             },true);
         }, 38);

@@ -1051,6 +1051,60 @@ function AE_Utility_Panel(thisObj) {
             resetLayerTransforms();
         }, 38);
 
+        btn(utilSec.btnGroup, "Del FX", "Remove effects by name from selected layers", function(){
+            var c = AE.requireComp();
+            if (!c) return;
+
+            var sel = c.selectedLayers;
+            if (sel.length === 0) {
+                alert("Select at least one layer");
+                return;
+            }
+
+            var fxName = prompt(
+                "Enter effect name to remove:\n(exactly as it appears in AE effects panel)",
+                ""
+            );
+            if (!fxName || fxName === "") return;
+
+            app.beginUndoGroup("AE Panel - Delete Effect");
+
+            var removedCount = 0;
+
+            for (var i = 0; i < sel.length; i++) {
+                var layer = sel[i];
+
+                try {
+                    var effects = layer.property("ADBE Effect Parade");
+                    if (!effects) continue;
+
+                    // Loop effects in reverse order to avoid index shifting
+                    for (var e = effects.numProperties; e >= 1; e--) {
+                        var effect = effects.property(e);
+                        if (!effect) continue;
+
+                        // Match by display name (case insensitive)
+                        if (effect.name.toLowerCase() === fxName.toLowerCase()) {
+                            effect.remove();
+                            removedCount++;
+                        }
+                    }
+
+                } catch (layerError) {
+                    $.writeln("Error processing layer '" + layer.name + "': " + layerError.message);
+                }
+            }
+
+            app.endUndoGroup();
+
+            // Show result
+            if (removedCount > 0) {
+                alert("Removed " + removedCount + " instance(s) of '" + fxName + "'");
+            } else {
+                alert("Effect '" + fxName + "' not found on any selected layer.\nMake sure the name matches exactly as shown in AE.");
+            }
+        }, 45);
+
         addSeparator();
 
         // ===== TWIXTOR (COLLAPSIBLE) =====
@@ -1268,27 +1322,27 @@ function AE_Utility_Panel(thisObj) {
             win.layout.layout(true);
         };
 
-        // --- ROW 1: Layer Ops ---
-        var toolsLayerSec = toolsContent.add("group");
-        toolsLayerSec.orientation = "column";
-        toolsLayerSec.alignChildren = "left";
-        toolsLayerSec.margins = 0;
-        toolsLayerSec.spacing = 2;
+        // --- ROW 1: Comp Tools ---
+        var toolsCompSec = toolsContent.add("group");
+        toolsCompSec.orientation = "column";
+        toolsCompSec.alignChildren = "left";
+        toolsCompSec.margins = 0;
+        toolsCompSec.spacing = 2;
 
-        var layerOpsLabel = toolsLayerSec.add("statictext", undefined, "Layer Operations");
+        var compToolsLabel = toolsCompSec.add("statictext", undefined, "Composition Tools");
         // SAFE: Use try-catch for font styling; fallback to default if unavailable
         try {
-            layerOpsLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
+            compToolsLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
         } catch (e) {
             // Fallback to system default font
         }
 
-        var tLayerRow = toolsLayerSec.add("group");
-        tLayerRow.orientation = "row";
-        tLayerRow.spacing = 3;
-        btn(tLayerRow, "Decomp", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
+        var tRow1 = toolsCompSec.add("group");
+        tRow1.orientation = "row";
+        tRow1.spacing = 3;
+        btn(tRow1, "Decomp", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
 
-        btn(tLayerRow, "Precomp", "Precompose selected layers separately with individual names", function(){
+        btn(tRow1, "EachComp", "Precompose each selected layer individually", function(){
             var comp = AE.requireComp();
             if (!comp) return;
 
@@ -1322,26 +1376,8 @@ function AE_Utility_Panel(thisObj) {
             }
 
             app.endUndoGroup();
-        }, 48);
+        }, 58);
 
-        // --- ROW 2: Comp Tools ---
-        var toolsCompSec = toolsContent.add("group");
-        toolsCompSec.orientation = "column";
-        toolsCompSec.alignChildren = "left";
-        toolsCompSec.margins = 0;
-        toolsCompSec.spacing = 2;
-
-        var compToolsLabel = toolsCompSec.add("statictext", undefined, "Composition Tools");
-        // SAFE: Use try-catch for font styling; fallback to default if unavailable
-        try {
-            compToolsLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-        } catch (e) {
-            // Fallback to system default font
-        }
-
-        var tRow1 = toolsCompSec.add("group");
-        tRow1.orientation = "row";
-        tRow1.spacing = 3;
         btn(tRow1, "Crop Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 60);
 
         win.layout.layout(true);

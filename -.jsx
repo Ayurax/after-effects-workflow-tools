@@ -956,10 +956,30 @@ function AE_Utility_Panel(thisObj) {
         }, 38);
 
         btn(createRow,"Text","Create text layer for typography and titles", function(){
-            perSelection(function(c,l,i){
-                var t=c.layers.addText("Text "+(i+1)); t.label=9;
-                if(l){t.startTime=l.startTime;t.inPoint=l.inPoint;t.outPoint=l.outPoint;t.moveBefore(l);}
-            },true);
+            var c=getComp(); if(!c) return;
+            var targetLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
+            app.beginUndoGroup("AE Panel - Action");
+            var t=c.layers.addText("Text 1"); t.label=1;
+            $.sleep(100);
+            app.refresh();
+            try {
+                var rect=t.sourceRectAtTime(c.time,false);
+                if(rect&&rect.width>0&&rect.height>0){
+                    var dx=rect.left+rect.width/2;
+                    var dy=rect.top+rect.height/2;
+                    var anch=t.anchorPoint.value;
+                    var pos=t.position.value;
+                    t.anchorPoint.setValue([anch[0]+dx,anch[1]+dy]);
+                    t.position.setValue([pos[0]+dx,pos[1]+dy]);
+                }
+            } catch(e) {}
+            if(targetLayer){
+                t.startTime=targetLayer.startTime;
+                t.inPoint=targetLayer.inPoint;
+                t.outPoint=targetLayer.outPoint;
+                t.moveBefore(targetLayer);
+            }
+            app.endUndoGroup();
         }, 38);
 
         addSeparator();

@@ -699,6 +699,94 @@ function sequenceSelectedLayers() {
 }
 
 // ============================================================================
+// MOVE LAYERS TO CAMERA
+// ============================================================================
+function moveLayersToCamera() {
+    var comp = AE.requireComp();
+    if (!comp) return;
+
+    var sel = AE.requireSelection(comp);
+    if (!sel) return;
+
+    app.beginUndoGroup("AE Panel - To Camera");
+
+    try {
+        var activeCam = null;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var l = comp.layer(i);
+            if (l instanceof CameraLayer && l.enabled) {
+                if (comp.time >= l.inPoint && comp.time <= l.outPoint) {
+                    activeCam = l;
+                    break;
+                }
+            }
+        }
+
+        if (!activeCam) {
+            alert("No active camera found in comp.\nAdd a camera first.");
+            app.endUndoGroup();
+            return;
+        }
+
+        var camPos = activeCam.position.value;
+        var camPoint = activeCam.pointOfInterest.value;
+
+        var dx = camPoint[0] - camPos[0];
+        var dy = camPoint[1] - camPos[1];
+        var dz = camPoint[2] - camPos[2];
+
+        var dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist === 0) dist = 1;
+        var nx = dx / dist;
+        var ny = dy / dist;
+        var nz = dz / dist;
+
+        var targetDist = dist;
+        var targetX = camPos[0] + nx * targetDist;
+        var targetY = camPos[1] + ny * targetDist;
+        var targetZ = camPos[2] + nz * targetDist;
+
+        var skippedLayers = [];
+
+        for (var i = 0; i < sel.length; i++) {
+            var layer = sel[i];
+
+            if (!layer.threeDLayer) {
+                skippedLayers.push(layer.name);
+                continue;
+            }
+
+            try {
+                layer.position.setValue([targetX, targetY, targetZ]);
+
+                try {
+                    var camOrient = activeCam.orientation.value;
+                    var camRotX = activeCam.rotationX.value;
+                    var camRotY = activeCam.rotationY.value;
+                    var camRotZ = activeCam.rotationZ.value;
+                    layer.orientation.setValue(camOrient);
+                    layer.rotationX.setValue(camRotX);
+                    layer.rotationY.setValue(camRotY);
+                    layer.rotationZ.setValue(camRotZ);
+                } catch(e) {}
+            } catch (layerError) {
+                $.writeln("Error on layer '" + layer.name + "': " + layerError.message);
+            }
+        }
+
+        if (skippedLayers.length > 0) {
+            alert("Skipped 2D layers: " + skippedLayers.join(", ") +
+                  "\nEnable 3D on these layers first.");
+        }
+
+    } catch (e) {
+        alert("Error: " + e.message);
+    } finally {
+        app.endUndoGroup();
+    }
+}
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -1063,6 +1151,8 @@ function AE_Utility_Panel(thisObj) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
         }, 45);
+
+        btn(utilRow2, "To Cam", "Move selected 3D layers to center of active camera view (point of interest)", moveLayersToCamera, 45);
 
         addSeparator();
 

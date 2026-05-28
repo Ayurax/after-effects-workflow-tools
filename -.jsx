@@ -699,6 +699,77 @@ function sequenceSelectedLayers() {
 }
 
 // ============================================================================
+// MOVE LAYERS TO CAMERA
+// ============================================================================
+function moveLayersToCamera() {
+    var comp = AE.requireComp();
+    if (!comp) return;
+
+    var sel = AE.requireSelection(comp);
+    if (!sel) return;
+
+    app.beginUndoGroup("AE Panel - To Camera");
+
+    try {
+        var activeCam = null;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var l = comp.layer(i);
+            if (l instanceof CameraLayer && l.enabled) {
+                if (comp.time >= l.inPoint && comp.time <= l.outPoint) {
+                    activeCam = l;
+                    break;
+                }
+            }
+        }
+
+        if (!activeCam) {
+            alert("No active camera found in comp.\nAdd a camera first.");
+            app.endUndoGroup();
+            return;
+        }
+
+        var camPOI = activeCam.pointOfInterest.value;
+        var targetX = camPOI[0];
+        var targetY = camPOI[1];
+        var targetZ = camPOI[2];
+
+        var skippedLayers = [];
+
+        for (var i = 0; i < sel.length; i++) {
+            var layer = sel[i];
+
+            if (!layer.threeDLayer) {
+                skippedLayers.push(layer.name);
+                continue;
+            }
+
+            try {
+                layer.position.setValue([targetX, targetY, targetZ]);
+
+                try {
+                    layer.orientation.setValue([0, 0, 0]);
+                    layer.rotationX.setValue(0);
+                    layer.rotationY.setValue(0);
+                    layer.rotationZ.setValue(0);
+                } catch(e) {}
+            } catch (layerError) {
+                $.writeln("Error on layer '" + layer.name + "': " + layerError.message);
+            }
+        }
+
+        if (skippedLayers.length > 0) {
+            alert("Skipped 2D layers: " + skippedLayers.join(", ") +
+                  "\nEnable 3D on these layers first.");
+        }
+
+    } catch (e) {
+        alert("Error: " + e.message);
+    } finally {
+        app.endUndoGroup();
+    }
+}
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -1063,6 +1134,8 @@ function AE_Utility_Panel(thisObj) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
         }, 45);
+
+        btn(utilRow2, "To Cam", "Move selected 3D layers to center of active camera view (point of interest)", moveLayersToCamera, 45);
 
         addSeparator();
 

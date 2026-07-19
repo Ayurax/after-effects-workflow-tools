@@ -1244,7 +1244,6 @@ function AE_Utility_Panel(thisObj) {
                 comp.layers.precompose([data.index], "PreComp " + (i + 1), true);
                 var newLayer = comp.layer(data.index);
                 if (newLayer) {
-                    newLayer.startTime = data.startTime;
                     newLayer.inPoint = data.inPoint;
                     newLayer.outPoint = data.outPoint;
                 }

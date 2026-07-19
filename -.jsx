@@ -28,21 +28,6 @@ var AE = {
 };
 
 // ============================================================================
-// TRANSFORM DEFAULTS HELPER
-// ============================================================================
-var TransformDefaults = {
-    position: function(layer, comp) {
-        return layer.threeDLayer ? [comp.width/2, comp.height/2, 0] : [comp.width/2, comp.height/2];
-    },
-    scale: function(layer) {
-        return layer.threeDLayer ? [100,100,100] : [100,100];
-    },
-    rotation: function(layer) {
-        return layer.threeDLayer ? [0,0,0] : 0;
-    }
-};
-
-// ============================================================================
 // PROGRESS FEEDBACK HELPER
 // ============================================================================
 /**
@@ -517,50 +502,6 @@ function decomposeSelectedPrecomps_Advanced() {
 
 
 
-// ============================================================================
-// RESET TRANSFORMS
-// ============================================================================
-// Helper to strip keyframes, expressions, and reset the value
-function hardReset(prop, val) {
-    if (prop && prop.canSetExpression) {
-        while (prop.numKeys > 0) {
-            prop.removeKey(1);
-        }
-        if (prop.expression !== "") prop.expression = "";
-        prop.setValue(val);
-    }
-}
-
-function resetLayerTransforms() {
-    var comp = AE.requireComp();
-    if (!comp) return;
-
-    var sel = comp.selectedLayers;
-    if (sel.length === 0) return;
-
-    app.beginUndoGroup("AE Panel - Hard Reset Transforms");
-
-    for (var i = 0; i < sel.length; i++) {
-        var l = sel[i];
-
-        hardReset(l.position, TransformDefaults.position(l, comp));
-        hardReset(l.scale, TransformDefaults.scale(l));
-
-        if (l.threeDLayer) {
-            hardReset(l.orientation, TransformDefaults.rotation(l));
-            hardReset(l.rotationX, 0);
-            hardReset(l.rotationY, 0);
-            hardReset(l.rotationZ, 0);
-        } else {
-            hardReset(l.rotation, TransformDefaults.rotation(l));
-        }
-
-        hardReset(l.opacity, 100);
-    }
-    app.endUndoGroup();
-}
-
-
 function cropCompToSelection() {
     var comp = AE.requireComp();
     if (!comp) return;
@@ -906,7 +847,14 @@ function AE_Utility_Panel(thisObj) {
             utilLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
         } catch (e) {}
 
-        btn(utilSec.btnGroup, "1F Adj", "Create single-frame adjustment layer at playhead", function(){
+        var utilRow2 = utilSec.section.add("group");
+        utilRow2.orientation = "row";
+        utilRow2.alignment = ["center", "center"];
+        utilRow2.alignChildren = ["center", "center"];
+        utilRow2.margins = 0;
+        utilRow2.spacing = 3;
+
+        btn(utilRow2, "1F Adj", "Create single-frame adjustment layer at playhead", function(){
             var c=getComp(); if(!c) return;
             var prevLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
             app.beginUndoGroup("AE Panel - 1F Adj");
@@ -921,47 +869,6 @@ function AE_Utility_Panel(thisObj) {
             if(prevLayer) a.moveBefore(prevLayer);
             app.endUndoGroup();
         }, 50);
-
-        btn(utilSec.btnGroup,"Camera","Create camera with null controller (auto-frame selected layers)", function(){
-            var c=getComp(); if(!c) return;
-            app.beginUndoGroup("AE Panel - Camera Rig");
-            var cam=c.layers.addCamera("Camera",[c.width/2,c.height/2]);
-            var ctl=c.layers.addNull();
-            ctl.name="Camera Controller";ctl.threeDLayer=true;ctl.motionBlur=true;ctl.label=16;
-
-            var poi=[c.width/2,c.height/2,0];
-            var zoomVal=cam.zoom.value;
-            ctl.position.setValue(poi);
-
-            if(c.selectedLayers.length){
-                var sel=c.selectedLayers;
-                var minIn=sel[0].inPoint,maxOut=sel[0].outPoint;
-                for(var i=1;i<sel.length;i++){
-                    if(sel[i].inPoint<minIn)minIn=sel[i].inPoint;
-                    if(sel[i].outPoint>maxOut)maxOut=sel[i].outPoint;
-                }
-                cam.startTime=ctl.startTime=minIn;
-                cam.inPoint=ctl.inPoint=minIn;
-                cam.outPoint=ctl.outPoint=maxOut;
-            }
-
-            ctl.moveBefore(cam);cam.parent=ctl;
-            cam.autoOrient=AutoOrientType.NO_AUTO_ORIENT;
-            cam.position.setValue([0,0,-zoomVal]);
-            cam.pointOfInterest.setValue([0,0,0]);
-            app.endUndoGroup();
-        }, 70);
-
-        btn(utilSec.btnGroup, "Reset", "Reset all transforms: position, scale, rotation and opacity", function(){
-            resetLayerTransforms();
-        }, 38);
-
-        var utilRow2 = utilSec.section.add("group");
-        utilRow2.orientation = "row";
-        utilRow2.alignment = ["center", "center"];
-        utilRow2.alignChildren = ["center", "center"];
-        utilRow2.margins = 0;
-        utilRow2.spacing = 3;
 
         btn(utilRow2, "Del FX", "Remove effects by name from selected layers", function(){
             var c = AE.requireComp();
@@ -1337,7 +1244,6 @@ function AE_Utility_Panel(thisObj) {
                 comp.layers.precompose([data.index], "PreComp " + (i + 1), true);
                 var newLayer = comp.layer(data.index);
                 if (newLayer) {
-                    newLayer.startTime = data.startTime;
                     newLayer.inPoint = data.inPoint;
                     newLayer.outPoint = data.outPoint;
                 }

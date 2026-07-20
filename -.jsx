@@ -210,6 +210,14 @@ function setAnchorPreset(mode, layerIndices) {
             var deltaX = targetX - currentAnchor[0];
             var deltaY = targetY - currentAnchor[1];
 
+            var scaleVal = layer.scale.value;
+            var scaleX = scaleVal[0] / 100;
+            var scaleY = scaleVal[1] / 100;
+            var rot = (is3D ? 0 : layer.rotation.value) * Math.PI / 180;
+
+            var compDeltaX = deltaX * scaleX * Math.cos(rot) - deltaY * scaleY * Math.sin(rot);
+            var compDeltaY = deltaX * scaleX * Math.sin(rot) + deltaY * scaleY * Math.cos(rot);
+
             var newAnchor = is3D
                 ? [targetX, targetY, currentAnchor[2]]
                 : [targetX, targetY];
@@ -225,11 +233,11 @@ function setAnchorPreset(mode, layerIndices) {
             }
 
             if (posProp.numKeys > 0) {
-                shiftKeyframes(posProp, deltaX, deltaY, 0, is3D);
+                shiftKeyframes(posProp, compDeltaX, compDeltaY, 0, is3D);
             } else {
                 posProp.setValue(is3D
-                    ? [currentPosition[0] + deltaX, currentPosition[1] + deltaY, currentPosition[2]]
-                    : [currentPosition[0] + deltaX, currentPosition[1] + deltaY]);
+                    ? [currentPosition[0] + compDeltaX, currentPosition[1] + compDeltaY, currentPosition[2]]
+                    : [currentPosition[0] + compDeltaX, currentPosition[1] + compDeltaY]);
             }
 
             successCount++;

@@ -724,6 +724,9 @@ function AE_Utility_Panel(thisObj) {
 
             var titleText = section.add("statictext", undefined, title);
             titleText.alignment = ["left", "center"];
+            try {
+                titleText.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
+            } catch (e) {}
 
             var btnGroup = section.add("group");
             btnGroup.orientation = "row";
@@ -846,16 +849,10 @@ function AE_Utility_Panel(thisObj) {
 
         addSeparator();
 
-        // ===== UTILITIES =====
-        var utilSec = addSection("Utilities");
+        // ===== TIMING =====
+        var timingSec = addSection("Timing");
 
-        // STYLE: Apply bold header styling for consistency with other sections
-        var utilLabel = utilSec.section.children[0];
-        try {
-            utilLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-        } catch (e) {}
-
-        var utilRow2 = utilSec.section.add("group");
+        var utilRow2 = timingSec.section.add("group");
         utilRow2.orientation = "row";
         utilRow2.alignment = ["center", "center"];
         utilRow2.alignChildren = ["center", "center"];
@@ -878,7 +875,7 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         }, 50);
 
-        btn(utilRow2, "Del FX", "Remove effects by name from selected layers", function(){
+        btn(utilRow2, "Nuke FX", "Remove effects by name from selected layers", function(){
             var c = AE.requireComp();
             if (!c) return;
 
@@ -932,7 +929,7 @@ function AE_Utility_Panel(thisObj) {
             }
         }, 45);
 
-        btn(utilRow2, "2S Trim", "Trim selected layers to 2 seconds centered on playhead (1 sec each side)", function(){
+        btn(utilRow2, "Quick Trim", "Trim selected layers to 2 seconds centered on playhead (1 sec each side)", function(){
             var c = AE.requireComp();
             if (!c) return;
 
@@ -988,8 +985,10 @@ function AE_Utility_Panel(thisObj) {
 
         addSeparator();
 
-        // ===== TWIXTOR (COLLAPSIBLE) =====
-        var twixtorSec = g.add("group");
+        // ===== EFFECTS =====
+        var effectsSec = addSection("Effects");
+
+        var twixtorSec = effectsSec.section.add("group");
         twixtorSec.orientation = "column";
         twixtorSec.alignChildren = "fill";
         twixtorSec.margins = 0;
@@ -1095,40 +1094,18 @@ function AE_Utility_Panel(thisObj) {
             resetProgressBar();
         }, 55);
 
-        btn(twixtorRow, "Sequence", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 55);
+        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 55);
 
         addSeparator();
 
-        // ===== ANCHOR PRESETS (COLLAPSIBLE) =====
-        var anchorSec = g.add("group");
-        anchorSec.orientation = "column";
-        anchorSec.alignChildren = "fill";
-        anchorSec.margins = 0;
-        anchorSec.spacing = 4;
+        // ===== ANCHOR =====
+        var anchorSec = addSection("Anchor");
 
-        // Collapsible header button
-        var anchorHeaderBtn = anchorSec.add("button", undefined, "Anchor Point Presets ▼");
-        anchorHeaderBtn.preferredSize = [undefined, 20];
-        anchorHeaderBtn.helpTip = "Set anchor point to preset positions (TL=top-left, C=center, BR=bottom-right, etc.)";
-
-        // Content group (hidden by default)
-        var anchorContent = anchorSec.add("group");
+        var anchorContent = anchorSec.section.add("group");
         anchorContent.orientation = "column";
         anchorContent.alignChildren = ["center", "fill"];
         anchorContent.margins = 0;
         anchorContent.spacing = 2;
-        anchorContent.visible = false;  // Start collapsed
-        anchorContent.maximumSize = [9999, 0]; // Force 0 height when collapsed
-
-        var isExpanded = false;
-
-        anchorHeaderBtn.onClick = function() {
-            isExpanded = !isExpanded;
-            anchorContent.visible = isExpanded;
-            anchorContent.maximumSize = isExpanded ? [9999, 9999] : [9999, 0];
-            anchorHeaderBtn.text = isExpanded ? "Anchor Point Presets ▲" : "Anchor Point Presets ▼";
-            win.layout.layout(true);
-        };
 
         // 3x3 Anchor Preset Grid
         var presets = [["TL", "TC", "TR"], ["CL", "C", "CR"], ["BL", "BC", "BR"]];
@@ -1176,56 +1153,15 @@ function AE_Utility_Panel(thisObj) {
 
         addSeparator();
 
-        // ===== TOOLS PRESETS (COLLAPSIBLE) =====
-        var toolsSec = g.add("group");
-        toolsSec.orientation = "column";
-        toolsSec.alignChildren = "fill";
-        toolsSec.margins = 0;
-        toolsSec.spacing = 4;
+        // ===== COMPOSITION =====
+        var toolsSec = addSection("Composition");
 
-        var toolsHeaderBtn = toolsSec.add("button", undefined, "Advanced Tools ▼");
-        toolsHeaderBtn.preferredSize = [undefined, 20];
-        toolsHeaderBtn.helpTip = "Decompose, crop, sequence layers, and plugin launcher";
-
-        var toolsContent = toolsSec.add("group");
-        toolsContent.orientation = "column"; // Changed to column to hold multiple rows
-        toolsContent.alignChildren = "left";
-        toolsContent.margins = 0;
-        toolsContent.spacing = 2;
-        toolsContent.visible = false;
-        toolsContent.maximumSize = [9999, 0];
-
-        var isToolsExpanded = false;
-
-        toolsHeaderBtn.onClick = function() {
-            isToolsExpanded = !isToolsExpanded;
-            toolsContent.visible = isToolsExpanded;
-            toolsContent.maximumSize = isToolsExpanded ? [9999, 9999] : [9999, 0];
-            toolsHeaderBtn.text = isToolsExpanded ? "Advanced Tools ▲" : "Advanced Tools ▼";
-            win.layout.layout(true);
-        };
-
-        // --- ROW 1: Comp Tools ---
-        var toolsCompSec = toolsContent.add("group");
-        toolsCompSec.orientation = "column";
-        toolsCompSec.alignChildren = "left";
-        toolsCompSec.margins = 0;
-        toolsCompSec.spacing = 2;
-
-        var compToolsLabel = toolsCompSec.add("statictext", undefined, "Composition Tools");
-        // SAFE: Use try-catch for font styling; fallback to default if unavailable
-        try {
-            compToolsLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-        } catch (e) {
-            // Fallback to system default font
-        }
-
-        var tRow1 = toolsCompSec.add("group");
+        var tRow1 = toolsSec.section.add("group");
         tRow1.orientation = "row";
         tRow1.spacing = 3;
-        btn(tRow1, "Decomp", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
+        btn(tRow1, "Unpack", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
 
-        btn(tRow1, "EachComp", "Precompose each selected layer individually", function(){
+        btn(tRow1, "Isolate", "Precompose each selected layer individually", function(){
             var comp = AE.requireComp();
             if (!comp) return;
 
@@ -1260,7 +1196,7 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         }, 58);
 
-        btn(tRow1, "Crop Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 60);
+        btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 60);
 
         win.layout.layout(true);
         return win;

@@ -648,6 +648,248 @@ function sequenceSelectedLayers() {
 }
 
 // ============================================================================
+// CHARACTER SEPARATION HELPER (CHARS)
+// ============================================================================
+/**
+ * Separate a selected text layer into individual character layers.
+ * Positions each character precisely to reconstruct the original text layout,
+ * accounting for kerning, advance widths, font metrics, spaces, and justification.
+ */
+function separateTextToCharacters() {
+    var comp = AE.requireComp();
+    if (!comp) return;
+
+    var sel = comp.selectedLayers;
+    if (!sel || sel.length === 0) {
+        alert("Please select a text layer.");
+        return;
+    }
+    if (sel.length > 1) {
+        alert("Please select only one text layer.");
+        return;
+    }
+
+    var origLayer = sel[0];
+    var textProps = origLayer.property("ADBE Text Properties");
+    var textProp = textProps ? textProps.property("ADBE Text Document") : null;
+    if (!textProp) {
+        alert("Selected layer is not a text layer.");
+        return;
+    }
+
+    var origTextDoc = textProp.value;
+    var originalText = origTextDoc.text;
+    if (!originalText || originalText.length === 0) {
+        alert("Selected text layer is empty.");
+        return;
+    }
+
+    app.beginUndoGroup("AE Panel - Chars");
+
+    var measureLayer = null;
+    try {
+        var renderTime = comp.time;
+        var is3D = origLayer.threeDLayer;
+        var origPos = origLayer.position.value;
+        var origAnchor = origLayer.anchorPoint.value;
+        var origScale = origLayer.scale.value;
+        var origRot = is3D ? 0 : origLayer.rotation.value;
+        var origOpacity = origLayer.opacity.value;
+        var origInPoint = origLayer.inPoint;
+        var origOutPoint = origLayer.outPoint;
+        var origStartTime = origLayer.startTime;
+        var origParent = origLayer.parent;
+        var origLabel = origLayer.label;
+        var origJustification = origTextDoc.justification;
+
+        var scaleX = origScale[0] / 100;
+        var scaleY = origScale[1] / 100;
+        var rotRad = origRot * Math.PI / 180;
+        var cosRot = Math.cos(rotRad);
+        var sinRot = Math.sin(rotRad);
+
+        // Create a single temporary text layer for prefix measurements
+        measureLayer = comp.layers.addText("");
+        var measureProp = measureLayer.property("ADBE Text Properties").property("ADBE Text Document");
+        var measureDoc = textProp.value;
+
+        // Split text into individual lines to support multi-line text accurately
+        var lines = originalText.split(/\r\n|[\r\n]/);
+        var createdLayers = [];
+
+        for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+            var lineText = lines[lineIdx];
+            if (!lineText || lineText.length === 0) continue;
+
+            // Build newlines prefix to place measurement on the correct line baseline
+            var linePrefixNewlines = "";
+            for (var n = 0; n < lineIdx; n++) {
+                linePrefixNewlines += "\r";
+            }
+
+            // Step 1: Measure line bounds with original justification
+            measureDoc.justification = origJustification;
+            measureDoc.text = linePrefixNewlines + lineText;
+            measureProp.setValue(measureDoc);
+            var lineBoundsOrig = measureLayer.sourceRectAtTime(renderTime, false);
+
+            // Step 2: Measure cumulative prefix advances within the line using LEFT_JUSTIFY
+            // to ensure a stable coordinate origin for glyph advance calculation
+            measureDoc.justification = ParagraphJustification.LEFT_JUSTIFY;
+
+            // Find first non-space character in the line
+            var firstNonSpace = -1;
+            for (var c = 0; c < lineText.length; c++) {
+                var testCh = lineText.charAt(c);
+                if (testCh !== " " && testCh !== "\t") {
+                    firstNonSpace = c;
+                    break;
+                }
+            }
+            if (firstNonSpace === -1) continue; // entire line is whitespace
+
+            // Measure baseline offset for this line relative to line 0
+            var lineBaseline = 0;
+            if (lineIdx > 0) {
+                var refCh = lineText.charAt(firstNonSpace);
+                measureDoc.text = refCh;
+                measureProp.setValue(measureDoc);
+                var refRect0 = measureLayer.sourceRectAtTime(renderTime, false);
+
+                measureDoc.text = linePrefixNewlines + refCh;
+                measureProp.setValue(measureDoc);
+                var refRectL = measureLayer.sourceRectAtTime(renderTime, false);
+
+                lineBaseline = refRectL.top - refRect0.top;
+            }
+
+            // Measure reference left position of first non-space character
+            measureDoc.text = lineText.substring(0, firstNonSpace + 1);
+            measureProp.setValue(measureDoc);
+            var baseRect = measureLayer.sourceRectAtTime(renderTime, false);
+            var baseLeft = baseRect.left;
+
+            // Step 3: Iterate through characters on this line
+            for (var charIdx = 0; charIdx < lineText.length; charIdx++) {
+                var ch = lineText.charAt(charIdx);
+
+                // Skip creating layers for whitespace characters; their advance is already captured
+                if (ch === " " || ch === "\t") continue;
+
+                // Measure prefix up to and including this character
+                measureDoc.text = lineText.substring(0, charIdx + 1);
+                measureProp.setValue(measureDoc);
+                var prefixRect = measureLayer.sourceRectAtTime(renderTime, false);
+                var rightEdge = prefixRect.left + prefixRect.width;
+
+                // Create independent text layer for this character
+                var charLayer = comp.layers.addText(ch);
+                createdLayers.push(charLayer);
+
+                // Copy original text document styling and set text to this character
+                var charProp = charLayer.property("ADBE Text Properties").property("ADBE Text Document");
+                var charDoc = textProp.value;
+                charDoc.text = ch;
+                charProp.setValue(charDoc);
+
+                // Measure character bounds
+                var charBounds = charLayer.sourceRectAtTime(renderTime, false);
+
+                // Calculate horizontal offset within the line
+                var charLeftInLine = rightEdge - charBounds.width;
+                var charOffsetX = charLeftInLine - baseLeft;
+
+                // Local position of character in original layer space
+                var charLocalLeft = lineBoundsOrig.left + charOffsetX;
+
+                // Set character anchor point to center of the character
+                var charCenterX = charBounds.left + charBounds.width / 2;
+                var charCenterY = charBounds.top + charBounds.height / 2;
+                var charAnchor = is3D ? [charCenterX, charCenterY, 0] : [charCenterX, charCenterY];
+
+                // Corresponding center in original layer local coordinates (aligned to baseline)
+                var origCenterX = charLocalLeft + charBounds.width / 2;
+                var origCenterY = lineBaseline + charCenterY;
+
+                // Vector from original anchor point to character center
+                var deltaX = origCenterX - origAnchor[0];
+                var deltaY = origCenterY - origAnchor[1];
+
+                // Transform local delta to comp/parent coordinates
+                var compDeltaX = deltaX * scaleX * cosRot - deltaY * scaleY * sinRot;
+                var compDeltaY = deltaX * scaleX * sinRot + deltaY * scaleY * cosRot;
+
+                var newPos = is3D
+                    ? [origPos[0] + compDeltaX, origPos[1] + compDeltaY, origPos[2]]
+                    : [origPos[0] + compDeltaX, origPos[1] + compDeltaY];
+
+                // If 3D, try to use world matrix if available
+                if (is3D && typeof origLayer.toWorld === "function") {
+                    try {
+                        var worldPoint = origLayer.toWorld([origCenterX, origCenterY, origAnchor[2] || 0]);
+                        if (origParent && typeof origParent.fromWorld === "function") {
+                            newPos = origParent.fromWorld(worldPoint);
+                        } else if (!origParent) {
+                            newPos = worldPoint;
+                        }
+                    } catch (eWorld) {}
+                }
+
+                // Apply transforms
+                charLayer.anchorPoint.setValue(charAnchor);
+                charLayer.position.setValue(newPos);
+                charLayer.scale.setValue(origScale);
+                if (!is3D) {
+                    charLayer.rotation.setValue(origRot);
+                } else {
+                    charLayer.threeDLayer = true;
+                    try { charLayer.orientation.setValue(origLayer.orientation.value); } catch (e) {}
+                    try { charLayer.xRotation.setValue(origLayer.xRotation.value); } catch (e) {}
+                    try { charLayer.yRotation.setValue(origLayer.yRotation.value); } catch (e) {}
+                    try { charLayer.zRotation.setValue(origLayer.zRotation.value); } catch (e) {}
+                }
+                charLayer.opacity.setValue(origOpacity);
+
+                // Preserve layer timing and properties
+                charLayer.inPoint = origInPoint;
+                charLayer.outPoint = origOutPoint;
+                charLayer.startTime = origStartTime;
+                if (origLabel > 0) charLayer.label = origLabel;
+                charLayer.name = ch;
+
+                if (origParent) {
+                    try { charLayer.parent = origParent; } catch (eParent) {}
+                }
+            }
+        }
+
+        // Clean up measurement layer immediately
+        if (measureLayer) {
+            try { measureLayer.remove(); } catch (eRem) {}
+            measureLayer = null;
+        }
+
+        // Arrange layers in timeline directly above original layer in natural reading order
+        for (var i = 0; i < createdLayers.length; i++) {
+            try {
+                createdLayers[i].moveBefore(origLayer);
+            } catch (eMove) {}
+        }
+
+        // Disable visibility on original layer to reveal separated characters
+        origLayer.enabled = false;
+
+    } catch (err) {
+        alert("Chars error: " + err.message);
+    } finally {
+        if (measureLayer) {
+            try { measureLayer.remove(); } catch (eFinally) {}
+        }
+        app.endUndoGroup();
+    }
+}
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -846,6 +1088,16 @@ function AE_Utility_Panel(thisObj) {
 
             app.endUndoGroup();
         }, 38);
+
+        var createRow2 = createSec.section.add("group");
+        createRow2.orientation = "row";
+        createRow2.alignChildren = "left";
+        createRow2.margins = 0;
+        createRow2.spacing = 3;
+
+        btn(createRow2, "Chars", "Separate text into individual character layers", function () {
+            separateTextToCharacters();
+        }, 44);
 
         addSeparator();
 

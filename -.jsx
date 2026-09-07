@@ -949,9 +949,9 @@ function AE_Utility_Panel(thisObj) {
         function btn(group, label, tip, fn, width) {
             var b = group.add("button", undefined, label, { style:"toolbutton" });
             var sz = width || 26;
-            b.preferredSize = [sz, 18];
-            b.minimumSize = [sz, 18];
-            b.maximumSize = [sz, 18];
+            b.preferredSize = [sz, 20];
+            b.minimumSize = [sz, 20];
+            b.maximumSize = [sz, 20];
             b.helpTip = tip;
             b.onClick = fn;
             return b;
@@ -972,7 +972,8 @@ function AE_Utility_Panel(thisObj) {
 
             var btnGroup = section.add("group");
             btnGroup.orientation = "row";
-            btnGroup.alignChildren = "left";
+            btnGroup.alignment = ["center", "center"];
+            btnGroup.alignChildren = ["center", "center"];
             btnGroup.margins = 0;
             btnGroup.spacing = 2;
 
@@ -985,22 +986,18 @@ function AE_Utility_Panel(thisObj) {
             sep.margins = 0;
             sep.height = 1;
             sep.minimumSize = [0, 1];
+            sep.maximumSize = [9999, 1];
         }
 
-        // ===== CREATE =====
+        // ===== CREATE LAYERS =====
         var createSec = addSection("Create Layers");
 
         var createRow = createSec.section.add("group");
         createRow.orientation = "row";
-        createRow.alignChildren = "left";
+        createRow.alignment = ["center", "center"];
+        createRow.alignChildren = ["center", "center"];
         createRow.margins = 0;
         createRow.spacing = 3;
-
-        // STYLE: Apply bold header styling for consistency with other sections
-        var createLabel = createSec.section.children[0];
-        try {
-            createLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-        } catch (e) {}
 
         btn(createRow,"Null","Create a null object for parenting and control", function(){
             perSelection(function(c,l){
@@ -1029,7 +1026,7 @@ function AE_Utility_Panel(thisObj) {
                     l.parent=n;
                 }
             },true);
-        }, 38);
+        }, 43);
 
         btn(createRow,"Adj Layer","Create adjustment layer (white solid) for effects", function(){
             perSelection(function(c,l,i){
@@ -1037,7 +1034,7 @@ function AE_Utility_Panel(thisObj) {
                 a.adjustmentLayer=true;a.label=11;
                 if(l){a.startTime=l.startTime;a.inPoint=l.inPoint;a.outPoint=l.outPoint;a.moveBefore(l);}
             },true);
-        }, 50);
+        }, 58);
 
         btn(createRow, "Solid", "Create a new solid layer", function() {
             var c = AE.requireComp();
@@ -1046,7 +1043,7 @@ function AE_Utility_Panel(thisObj) {
             var countBefore = c.numLayers;
             app.executeCommand(2038);
             app.endUndoGroup();
-        }, 38);
+        }, 43);
 
         btn(createRow, "Text", "Create text layer for typography and titles", function () {
             var c = AE.requireComp();
@@ -1087,17 +1084,18 @@ function AE_Utility_Panel(thisObj) {
             }
 
             app.endUndoGroup();
-        }, 38);
+        }, 43);
 
         var createRow2 = createSec.section.add("group");
         createRow2.orientation = "row";
-        createRow2.alignChildren = "left";
+        createRow2.alignment = ["center", "center"];
+        createRow2.alignChildren = ["center", "center"];
         createRow2.margins = 0;
         createRow2.spacing = 3;
 
         btn(createRow2, "Chars", "Separate text into individual character layers", function () {
             separateTextToCharacters();
-        }, 44);
+        }, 88);
 
         addSeparator();
 
@@ -1109,7 +1107,7 @@ function AE_Utility_Panel(thisObj) {
         utilRow2.alignment = ["center", "center"];
         utilRow2.alignChildren = ["center", "center"];
         utilRow2.margins = 0;
-        utilRow2.spacing = 3;
+        utilRow2.spacing = 4;
 
         btn(utilRow2, "1F Adj", "Create single-frame adjustment layer at playhead", function(){
             var c=getComp(); if(!c) return;
@@ -1125,61 +1123,7 @@ function AE_Utility_Panel(thisObj) {
             a.outPoint=t+frameDur;
             if(prevLayer) a.moveBefore(prevLayer);
             app.endUndoGroup();
-        }, 50);
-
-        btn(utilRow2, "Nuke FX", "Remove effects by name from selected layers", function(){
-            var c = AE.requireComp();
-            if (!c) return;
-
-            var sel = c.selectedLayers;
-            if (sel.length === 0) {
-                alert("Select at least one layer");
-                return;
-            }
-
-            var fxName = prompt(
-                "Enter effect name to remove:\n(exactly as it appears in AE effects panel)",
-                ""
-            );
-            if (!fxName || fxName === "") return;
-
-            app.beginUndoGroup("AE Panel - Delete Effect");
-
-            var removedCount = 0;
-
-            for (var i = 0; i < sel.length; i++) {
-                var layer = sel[i];
-
-                try {
-                    var effects = layer.property("ADBE Effect Parade");
-                    if (!effects) continue;
-
-                    // Loop effects in reverse order to avoid index shifting
-                    for (var e = effects.numProperties; e >= 1; e--) {
-                        var effect = effects.property(e);
-                        if (!effect) continue;
-
-                        // Match by display name (case insensitive)
-                        if (effect.name.toLowerCase() === fxName.toLowerCase()) {
-                            effect.remove();
-                            removedCount++;
-                        }
-                    }
-
-                } catch (layerError) {
-                    $.writeln("Error processing layer '" + layer.name + "': " + layerError.message);
-                }
-            }
-
-            app.endUndoGroup();
-
-            // Show result
-            if (removedCount > 0) {
-                alert("Removed " + removedCount + " instance(s) of '" + fxName + "'");
-            } else {
-                alert("Effect '" + fxName + "' not found on any selected layer.\nMake sure the name matches exactly as shown in AE.");
-            }
-        }, 45);
+        }, 96);
 
         btn(utilRow2, "Quick Trim", "Trim selected layers to 2 seconds centered on playhead (1 sec each side)", function(){
             var c = AE.requireComp();
@@ -1233,7 +1177,7 @@ function AE_Utility_Panel(thisObj) {
             if (shortLayers.length > 0) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
-        }, 45);
+        }, 96);
 
         addSeparator();
 
@@ -1242,17 +1186,22 @@ function AE_Utility_Panel(thisObj) {
 
         var twixtorSec = effectsSec.section.add("group");
         twixtorSec.orientation = "column";
-        twixtorSec.alignChildren = "fill";
+        twixtorSec.alignment = ["center", "center"];
+        twixtorSec.alignChildren = ["center", "center"];
         twixtorSec.margins = 0;
         twixtorSec.spacing = 4;
 
-        var twixtorHeaderBtn = twixtorSec.add("button", undefined, "Twixtor ▼");
-        twixtorHeaderBtn.preferredSize = [undefined, 20];
+        var twixtorHeaderBtn = twixtorSec.add("button", undefined, "Twixtor ▼", { style: "toolbutton" });
+        twixtorHeaderBtn.alignment = ["center", "center"];
+        twixtorHeaderBtn.preferredSize = [196, 20];
+        twixtorHeaderBtn.minimumSize = [196, 20];
+        twixtorHeaderBtn.maximumSize = [196, 20];
         twixtorHeaderBtn.helpTip = "Twixtor helper tools";
 
         var twixtorContent = twixtorSec.add("group");
         twixtorContent.orientation = "column";
-        twixtorContent.alignChildren = "left";
+        twixtorContent.alignment = ["center", "center"];
+        twixtorContent.alignChildren = ["center", "center"];
         twixtorContent.margins = 0;
         twixtorContent.spacing = 2;
         twixtorContent.visible = false;
@@ -1271,9 +1220,10 @@ function AE_Utility_Panel(thisObj) {
         // Align Keys button
         var twixtorRow = twixtorContent.add("group");
         twixtorRow.orientation = "row";
-        twixtorRow.alignChildren = "left";
+        twixtorRow.alignment = ["center", "center"];
+        twixtorRow.alignChildren = ["center", "center"];
         twixtorRow.margins = 0;
-        twixtorRow.spacing = 3;
+        twixtorRow.spacing = 4;
 
         btn(twixtorRow, "Seq Keys", "Snap selected keyframes to first key (1-frame spacing)", function(){
             var c=getComp(); if(!c) return;
@@ -1344,9 +1294,9 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
 
             resetProgressBar();
-        }, 55);
+        }, 96);
 
-        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 55);
+        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 96);
 
         addSeparator();
 
@@ -1355,26 +1305,28 @@ function AE_Utility_Panel(thisObj) {
 
         var anchorContent = anchorSec.section.add("group");
         anchorContent.orientation = "column";
-        anchorContent.alignChildren = ["center", "fill"];
+        anchorContent.alignment = ["center", "center"];
+        anchorContent.alignChildren = ["center", "center"];
         anchorContent.margins = 0;
         anchorContent.spacing = 2;
 
         // 3x3 Anchor Preset Grid
-        var presets = [["TL", "TC", "TR"], ["CL", "C", "CR"], ["BL", "BC", "BR"]];
+        var presets = [["TL", "TC", "TR"], ["CL", "CC", "CR"], ["BL", "BC", "BR"]];
 
         for (var row = 0; row < 3; row++) {
             var rowGroup = anchorContent.add("group");
             rowGroup.orientation = "row";
             rowGroup.alignment = ["center", "center"];
+            rowGroup.alignChildren = ["center", "center"];
             rowGroup.margins = 0;
             rowGroup.spacing = 2;
 
             for (var col = 0; col < 3; col++) {
                 var label = presets[row][col];
                 var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
-                b.preferredSize = [18, 18];
-                b.minimumSize = [18, 18];
-                b.maximumSize = [18, 18];
+                b.preferredSize = [24, 20];
+                b.minimumSize = [24, 20];
+                b.maximumSize = [24, 20];
 
                 try {
                     b.graphics.backgroundColor = b.graphics.newBrush(
@@ -1396,7 +1348,8 @@ function AE_Utility_Panel(thisObj) {
                         }
 
                         app.beginUndoGroup("Anchor Preset");
-                        setAnchorPreset(presetMode, savedLayerIndices);
+                        var actualMode = (presetMode === "CC") ? "C" : presetMode;
+                        setAnchorPreset(actualMode, savedLayerIndices);
                         app.endUndoGroup();
                     };
                 })(label);
@@ -1410,8 +1363,11 @@ function AE_Utility_Panel(thisObj) {
 
         var tRow1 = toolsSec.section.add("group");
         tRow1.orientation = "row";
-        tRow1.spacing = 3;
-        btn(tRow1, "Unpack", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
+        tRow1.alignment = ["center", "center"];
+        tRow1.alignChildren = ["center", "center"];
+        tRow1.margins = 0;
+        tRow1.spacing = 4;
+        btn(tRow1, "Unpack", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 62);
 
         btn(tRow1, "Isolate", "Precompose each selected layer individually", function(){
             var comp = AE.requireComp();
@@ -1446,9 +1402,9 @@ function AE_Utility_Panel(thisObj) {
             }
 
             app.endUndoGroup();
-        }, 58);
+        }, 64);
 
-        btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 60);
+        btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 62);
 
         win.layout.layout(true);
         return win;

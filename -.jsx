@@ -890,6 +890,219 @@ function separateTextToCharacters() {
 }
 
 // ============================================================================
+// CAMERA WORLD TRANSFORM HELPER
+// ============================================================================
+/**
+ * Get the camera's actual world-space position and orientation at comp.time.
+ *
+ * Uses AE's native toWorld() which automatically resolves the ENTIRE parent
+ * hierarchy (no matter how many nested nulls) including animated position,
+ * scale, rotation, and orientation on every ancestor.
+ *
+ * The forward vector is determined by sampling two camera-local points and
+ * converting them to world space:
+ *   [0, 0, 0]  → camera origin in world space
+ *   [0, 0, 1]  → a point one unit behind the camera in world space
+ *
+ * In AE, camera space uses a left-handed, Z-positive convention where
+ * positive Z points INTO the scene (i.e. the viewing direction). Therefore
+ * [0,0,1] is one unit in front of the camera (into the scene), giving us
+ * the correct forward direction.
+ *
+ * @param  {CameraLayer} cam  - The camera layer to evaluate
+ * @returns {{ pos: number[], fwd: number[], up: number[], right: number[] }|null}
+ *          World-space position, normalised forward, up, and right vectors,
+ *          or null if the calculation fails.
+ */
+function getCameraWorldTransformAtTime(cam) {
+    try {
+        // Camera-local origin → world space  (this IS the camera's world position)
+        var wOrigin = cam.toWorld([0, 0, 0]);
+
+        // Camera-local [0,0,1] → world space  (forward into the scene)
+        var wFwd    = cam.toWorld([0, 0, 1]);
+
+        // Camera-local [0,1,0] → world space  (down in camera space → gives us up axis)
+        var wDown   = cam.toWorld([0, 1, 0]);
+
+        // Camera-local [1,0,0] → world space  (right axis)
+        var wRight  = cam.toWorld([1, 0, 0]);
+
+        // Build normalised direction vectors
+        function vecSub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+        function vecLen(v) { return Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]); }
+        function vecNorm(v) {
+            var l = vecLen(v);
+            if (l < 0.000001) return [0, 0, 1];
+            return [v[0]/l, v[1]/l, v[2]/l];
+        }
+
+        var fwd   = vecNorm(vecSub(wFwd,   wOrigin));
+        var down  = vecNorm(vecSub(wDown,  wOrigin));
+        var right = vecNorm(vecSub(wRight, wOrigin));
+
+        // "Up" for text facing = opposite of camera's down axis
+        var up = [-down[0], -down[1], -down[2]];
+
+        return {
+            pos:   [wOrigin[0], wOrigin[1], wOrigin[2]],
+            fwd:   fwd,
+            up:    up,
+            right: right
+        };
+    } catch (e) {
+        $.writeln("getCameraWorldTransformAtTime failed: " + e.message);
+        return null;
+    }
+}
+
+/**
+ * Choose a safe distance in front of the camera.
+ * We base it on the composition diagonal so the result scales naturally
+ * with different comp sizes / camera setups.
+ *
+ * @param  {CompItem} comp
+ * @param  {CameraLayer} cam
+ * @returns {number}
+ */
+function getCameraPlacementDistance(comp, cam) {
+    // Use camera zoom if available to get a distance that keeps text fully visible
+    var dist = 1000; // sensible default
+    try {
+        var zoom = cam.property("ADBE Camera Options Group").property("ADBE Camera Zoom").value;
+        // At this zoom, a sensor of comp-width fills the frame at distance = zoom.
+        // Place text at zoom distance so it fills the view nicely.
+        if (zoom > 0) dist = zoom;
+    } catch (e) {}
+    // Clamp so text is never too close (<100) or uselessly far (>10000)
+    if (dist < 100)   dist = 100;
+    if (dist > 10000) dist = 10000;
+    return dist;
+}
+
+/**
+ * Copy text-document styling and layer properties from a reference text layer
+ * to a newly created text layer.
+ *
+ * ONLY copies styling — does NOT touch position/anchor/orientation of newLayer.
+ *
+ * @param {TextLayer} refLayer  - the reference (selected) text layer
+ * @param {TextLayer} newLayer  - the new text layer to receive properties
+ * @param {CompItem}  comp
+ */
+function copyTextLayerProperties(refLayer, newLayer, comp) {
+    // ── Text document (font, size, fill, tracking, etc.) ──────────────────
+    try {
+        var refTextProp = refLayer.property("ADBE Text Properties")
+                                  .property("ADBE Text Document");
+        var newTextProp = newLayer.property("ADBE Text Properties")
+                                  .property("ADBE Text Document");
+        if (refTextProp && newTextProp) {
+            var refDoc = refTextProp.value;   // TextDocument snapshot
+            newTextProp.setValue(refDoc);     // applies font/size/fill/stroke etc.
+        }
+    } catch (e) {
+        $.writeln("Text document copy failed: " + e.message);
+    }
+
+    // ── Layer-level properties ─────────────────────────────────────────────
+    try { newLayer.threeDLayer  = refLayer.threeDLayer;  } catch (e) {}
+    try { newLayer.motionBlur   = refLayer.motionBlur;   } catch (e) {}
+    try { newLayer.blendingMode = refLayer.blendingMode; } catch (e) {}
+    try { newLayer.label        = refLayer.label;        } catch (e) {}
+
+    // Opacity (evaluate at current time so we get the instantaneous value)
+    try {
+        newLayer.opacity.setValue(refLayer.opacity.valueAtTime(comp.time, false));
+    } catch (e) {
+        try { newLayer.opacity.setValue(refLayer.opacity.value); } catch (e2) {}
+    }
+
+    // Scale (keep reference scale so font visually matches)
+    try {
+        var refScale = refLayer.scale.valueAtTime(comp.time, false);
+        newLayer.scale.setValue(refScale);
+    } catch (e) {}
+
+    // ── Effects ────────────────────────────────────────────────────────────
+    // IMPORTANT: Do NOT use srcFX.property(ef).copyToComp() here.
+    // In AE's ExtendScript API, calling copyToComp() on a property that belongs
+    // to a layer copies the ENTIRE OWNING LAYER into the comp — not just the
+    // effect — which is exactly the duplication we must avoid.
+    //
+    // Safe approach: add each effect to newLayer by matchName, then copy
+    // the individual property values across. This never touches srcLayer.
+    try {
+        var srcFX = refLayer.property("ADBE Effect Parade");
+        var dstFX = newLayer.property("ADBE Effect Parade");
+        if (srcFX && dstFX && srcFX.numProperties > 0) {
+            for (var ef = 1; ef <= srcFX.numProperties; ef++) {
+                try {
+                    var srcEffect = srcFX.property(ef);
+                    var matchName = srcEffect.matchName;
+                    // Add the effect to the destination layer by its internal match name
+                    var dstEffect = dstFX.addProperty(matchName);
+                    if (dstEffect) {
+                        // Copy each sub-property value (skip group containers)
+                        for (var ep = 1; ep <= srcEffect.numProperties; ep++) {
+                            try {
+                                var srcEP = srcEffect.property(ep);
+                                var dstEP = dstEffect.property(ep);
+                                if (srcEP && dstEP &&
+                                    srcEP.propertyValueType !== PropertyValueType.NO_VALUE &&
+                                    srcEP.propertyValueType !== PropertyValueType.CUSTOM_VALUE) {
+                                    dstEP.setValue(srcEP.valueAtTime(comp.time, false));
+                                }
+                            } catch (epErr) {}
+                        }
+                    }
+                } catch (efc) {
+                    $.writeln("Effect copy (item " + ef + ") failed: " + efc.message);
+                }
+            }
+        }
+    } catch (e) {
+        $.writeln("Effect copy (text) failed: " + e.message);
+    }
+
+    // ── Layer Styles ───────────────────────────────────────────────────────
+    try {
+        var srcSt = refLayer.property("ADBE Layer Styles");
+        var dstSt = newLayer.property("ADBE Layer Styles");
+        if (srcSt && dstSt && srcSt.numProperties > 0) {
+            for (var st = 1; st <= srcSt.numProperties; st++) {
+                try {
+                    var s = srcSt.property(st);
+                    var d = dstSt.property(st);
+                    if (s && d && s.enabled) {
+                        d.enabled = true;
+                        for (var sp = 1; sp <= s.numProperties; sp++) {
+                            try {
+                                var sp_s = s.property(sp);
+                                var sp_d = d.property(sp);
+                                if (sp_s && sp_d &&
+                                    sp_s.propertyValueType !== PropertyValueType.NO_VALUE) {
+                                    sp_d.setValue(sp_s.value);
+                                }
+                            } catch (spe) {}
+                        }
+                    }
+                } catch (ste) {}
+            }
+        }
+    } catch (e) {
+        $.writeln("Layer style copy (text) failed: " + e.message);
+    }
+
+    // ── Text Animators ────────────────────────────────────────────────────
+    // NOTE: Text animators cannot be transferred without copyToComp() in
+    // ExtendScript, and copyToComp() duplicates the entire source layer.
+    // We intentionally skip animator transfer to prevent duplication.
+    // The text document (font, size, fill, tracking, etc.) is already
+    // fully copied above via setValue(refDoc), which is the safe path.
+}
+
+// ============================================================================
 // SCRIPTUI PANEL
 // ============================================================================
 function AE_Utility_Panel(thisObj) {
@@ -949,9 +1162,9 @@ function AE_Utility_Panel(thisObj) {
         function btn(group, label, tip, fn, width) {
             var b = group.add("button", undefined, label, { style:"toolbutton" });
             var sz = width || 26;
-            b.preferredSize = [sz, 18];
-            b.minimumSize = [sz, 18];
-            b.maximumSize = [sz, 18];
+            b.preferredSize = [sz, 20];
+            b.minimumSize = [sz, 20];
+            b.maximumSize = [sz, 20];
             b.helpTip = tip;
             b.onClick = fn;
             return b;
@@ -972,7 +1185,8 @@ function AE_Utility_Panel(thisObj) {
 
             var btnGroup = section.add("group");
             btnGroup.orientation = "row";
-            btnGroup.alignChildren = "left";
+            btnGroup.alignment = ["center", "center"];
+            btnGroup.alignChildren = ["center", "center"];
             btnGroup.margins = 0;
             btnGroup.spacing = 2;
 
@@ -985,22 +1199,18 @@ function AE_Utility_Panel(thisObj) {
             sep.margins = 0;
             sep.height = 1;
             sep.minimumSize = [0, 1];
+            sep.maximumSize = [9999, 1];
         }
 
-        // ===== CREATE =====
+        // ===== CREATE LAYERS =====
         var createSec = addSection("Create Layers");
 
         var createRow = createSec.section.add("group");
         createRow.orientation = "row";
-        createRow.alignChildren = "left";
+        createRow.alignment = ["center", "center"];
+        createRow.alignChildren = ["center", "center"];
         createRow.margins = 0;
         createRow.spacing = 3;
-
-        // STYLE: Apply bold header styling for consistency with other sections
-        var createLabel = createSec.section.children[0];
-        try {
-            createLabel.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-        } catch (e) {}
 
         btn(createRow,"Null","Create a null object for parenting and control", function(){
             perSelection(function(c,l){
@@ -1029,7 +1239,7 @@ function AE_Utility_Panel(thisObj) {
                     l.parent=n;
                 }
             },true);
-        }, 38);
+        }, 43);
 
         btn(createRow,"Adj Layer","Create adjustment layer (white solid) for effects", function(){
             perSelection(function(c,l,i){
@@ -1037,7 +1247,7 @@ function AE_Utility_Panel(thisObj) {
                 a.adjustmentLayer=true;a.label=11;
                 if(l){a.startTime=l.startTime;a.inPoint=l.inPoint;a.outPoint=l.outPoint;a.moveBefore(l);}
             },true);
-        }, 50);
+        }, 58);
 
         btn(createRow, "Solid", "Create a new solid layer", function() {
             var c = AE.requireComp();
@@ -1046,7 +1256,7 @@ function AE_Utility_Panel(thisObj) {
             var countBefore = c.numLayers;
             app.executeCommand(2038);
             app.endUndoGroup();
-        }, 38);
+        }, 43);
 
         btn(createRow, "Text", "Create text layer for typography and titles", function () {
             var c = AE.requireComp();
@@ -1056,48 +1266,168 @@ function AE_Utility_Panel(thisObj) {
 
             app.beginUndoGroup("AE Panel - Text");
 
+            // ── STEP 1: Create new text layer ──────────────────────────────
             var t = c.layers.addText("Text 1");
             t.label = 5;
 
+            // Inherit timing from reference layer
             if (targetLayer) {
                 t.startTime = targetLayer.startTime;
-                t.inPoint = targetLayer.inPoint;
-                t.outPoint = targetLayer.outPoint;
+                t.inPoint   = targetLayer.inPoint;
+                t.outPoint  = targetLayer.outPoint;
                 t.moveBefore(targetLayer);
             }
 
-            // Force AE to compute text bounds
+            // ── STEP 3: Force AE to compute text bounds ────────────────────
+            // Split undo groups so AE commits the text layer before we read bounds
             app.endUndoGroup();
             app.beginUndoGroup("AE Panel - Text Anchor");
             $.sleep(200);
             try { app.refresh(); } catch(e) {}
 
+            // ── STEP 4: Center anchor (existing behavior — preserved) ───────
             try {
                 var rect = t.sourceRectAtTime(c.time, false);
                 if (rect && rect.width > 0) {
                     var cx = rect.left + rect.width / 2;
-                    var cy = rect.top + rect.height / 2;
-                    var a = t.anchorPoint.value;
-                    var p = t.position.value;
-                    t.anchorPoint.setValue([a[0] + cx, a[1] + cy]);
-                    t.position.setValue([p[0] + cx, p[1] + cy]);
+                    var cy = rect.top  + rect.height / 2;
+                    var anc = t.anchorPoint.value;
+                    var pos = t.position.value;
+                    t.anchorPoint.setValue([anc[0] + cx, anc[1] + cy]);
+                    t.position.setValue([pos[0] + cx, pos[1] + cy]);
                 }
-            } catch (e) {
-                $.writeln("Anchor center failed: " + e.message);
+            } catch (eAnc) {
+                $.writeln("Anchor center failed: " + eAnc.message);
+            }
+
+            // ── STEP 5: Camera-aware 3D placement ──────────────────────────
+            try {
+                var activeCam = null;
+                try { activeCam = c.activeCamera; } catch (eCam) {}
+
+                if (activeCam) {
+                    // Make the text layer 3D so it can live in 3D space
+                    t.threeDLayer = true;
+
+                    // Evaluate camera's full world transform at current playhead
+                    var camXF = getCameraWorldTransformAtTime(activeCam);
+
+                    if (camXF) {
+                        // Choose placement distance in front of camera
+                        var dist = getCameraPlacementDistance(c, activeCam);
+
+                        // World-space target point = camera pos + (forward * dist)
+                        var targetWorld = [
+                            camXF.pos[0] + camXF.fwd[0] * dist,
+                            camXF.pos[1] + camXF.fwd[1] * dist,
+                            camXF.pos[2] + camXF.fwd[2] * dist
+                        ];
+
+                        // Convert the world-space target into the text layer's
+                        // LOCAL position space. The text layer has no parent so
+                        // fromWorld() on any world point == world coords, but
+                        // if the text layer somehow gets a parent we still handle
+                        // it correctly via fromWorld on the layer itself.
+                        var localPos;
+                        try {
+                            localPos = t.fromWorld(targetWorld);
+                        } catch (eFW) {
+                            localPos = targetWorld; // fallback: world == local (unparented)
+                        }
+
+                        // Bake position — no expression
+                        t.position.setValue([localPos[0], localPos[1], localPos[2]]);
+
+                        // ── Orient text to face the camera ─────────────────
+                        // We want the text to face directly toward the camera.
+                        // The camera looks along +fwd; text should face -fwd (back at cam).
+                        //
+                        // AE orientation is XYZ Euler (degrees). We derive the
+                        // orientation angles from the camera's world axes so
+                        // the text plane is perpendicular to the camera's view ray.
+                        //
+                        // Strategy: build a rotation matrix from camera axes
+                        // and decompose to XYZ Euler:
+                        //
+                        //   text X-axis = camera right
+                        //   text Y-axis = camera up   (opposite of camera down)
+                        //   text Z-axis = -camera forward  (face toward camera)
+                        //
+                        // We use the camera's right/up/fwd already computed.
+
+                        var rx = camXF.right;   // text layer's local X in world
+                        var ry = camXF.up;       // text layer's local Y in world
+                        var rz = [               // text layer's local Z = -fwd
+                            -camXF.fwd[0],
+                            -camXF.fwd[1],
+                            -camXF.fwd[2]
+                        ];
+
+                        // Decompose rotation matrix [rx|ry|rz] → XYZ Euler (degrees)
+                        // Using standard AE/right-handed decomposition:
+                        //
+                        //   R = Rx * Ry * Rz
+                        //
+                        // Matrix columns are the world-space directions:
+                        //   col0 = rx, col1 = ry, col2 = rz
+                        //
+                        //   [ rx[0]  ry[0]  rz[0] ]
+                        //   [ rx[1]  ry[1]  rz[1] ]
+                        //   [ rx[2]  ry[2]  rz[2] ]
+                        //
+                        // Standard ZYX decomposition (matches AE Euler XYZ order):
+                        //   ry_angle = -asin(rz[0])
+                        //   rx_angle =  atan2(rz[1], rz[2])
+                        //   rz_angle =  atan2(ry[0], rx[0])
+
+                        var R20 = rz[0]; // m[2][0] in column-major = rz's x component
+                        var R21 = rz[1];
+                        var R22 = rz[2];
+                        var R10 = ry[0];
+                        var R00 = rx[0];
+
+                        var degX, degY, degZ;
+                        var clamped = Math.max(-1, Math.min(1, -R20));
+                        degY = Math.asin(clamped) * 180 / Math.PI;
+
+                        var cosY = Math.cos(degY * Math.PI / 180);
+                        if (Math.abs(cosY) > 0.0001) {
+                            degX = Math.atan2(R21 / cosY, R22 / cosY) * 180 / Math.PI;
+                            degZ = Math.atan2(R10 / cosY, R00 / cosY) * 180 / Math.PI;
+                        } else {
+                            // Gimbal lock — degenerate case, zero out roll
+                            degX = Math.atan2(-rz[1], ry[1]) * 180 / Math.PI;
+                            degZ = 0;
+                        }
+
+                        // Bake orientation — use xRotation/yRotation/zRotation
+                        // which are the individual-axis controls in AE 3D layers.
+                        // These are set in degrees and applied AFTER orientation.
+                        // Reset orientation to zero first, then set the axes.
+                        try { t.orientation.setValue([0, 0, 0]); } catch (eO) {}
+                        try { t.xRotation.setValue(degX); } catch (eX) {}
+                        try { t.yRotation.setValue(degY); } catch (eY) {}
+                        try { t.zRotation.setValue(degZ); } catch (eZ) {}
+                    }
+                }
+            } catch (eCamPlace) {
+                $.writeln("Camera placement failed (non-fatal): " + eCamPlace.message);
+                // Text layer is still created correctly above — just without camera placement
             }
 
             app.endUndoGroup();
-        }, 38);
+        }, 43);
 
         var createRow2 = createSec.section.add("group");
         createRow2.orientation = "row";
-        createRow2.alignChildren = "left";
+        createRow2.alignment = ["center", "center"];
+        createRow2.alignChildren = ["center", "center"];
         createRow2.margins = 0;
         createRow2.spacing = 3;
 
         btn(createRow2, "Chars", "Separate text into individual character layers", function () {
             separateTextToCharacters();
-        }, 44);
+        }, 88);
 
         addSeparator();
 
@@ -1109,7 +1439,7 @@ function AE_Utility_Panel(thisObj) {
         utilRow2.alignment = ["center", "center"];
         utilRow2.alignChildren = ["center", "center"];
         utilRow2.margins = 0;
-        utilRow2.spacing = 3;
+        utilRow2.spacing = 4;
 
         btn(utilRow2, "1F Adj", "Create single-frame adjustment layer at playhead", function(){
             var c=getComp(); if(!c) return;
@@ -1125,61 +1455,7 @@ function AE_Utility_Panel(thisObj) {
             a.outPoint=t+frameDur;
             if(prevLayer) a.moveBefore(prevLayer);
             app.endUndoGroup();
-        }, 50);
-
-        btn(utilRow2, "Nuke FX", "Remove effects by name from selected layers", function(){
-            var c = AE.requireComp();
-            if (!c) return;
-
-            var sel = c.selectedLayers;
-            if (sel.length === 0) {
-                alert("Select at least one layer");
-                return;
-            }
-
-            var fxName = prompt(
-                "Enter effect name to remove:\n(exactly as it appears in AE effects panel)",
-                ""
-            );
-            if (!fxName || fxName === "") return;
-
-            app.beginUndoGroup("AE Panel - Delete Effect");
-
-            var removedCount = 0;
-
-            for (var i = 0; i < sel.length; i++) {
-                var layer = sel[i];
-
-                try {
-                    var effects = layer.property("ADBE Effect Parade");
-                    if (!effects) continue;
-
-                    // Loop effects in reverse order to avoid index shifting
-                    for (var e = effects.numProperties; e >= 1; e--) {
-                        var effect = effects.property(e);
-                        if (!effect) continue;
-
-                        // Match by display name (case insensitive)
-                        if (effect.name.toLowerCase() === fxName.toLowerCase()) {
-                            effect.remove();
-                            removedCount++;
-                        }
-                    }
-
-                } catch (layerError) {
-                    $.writeln("Error processing layer '" + layer.name + "': " + layerError.message);
-                }
-            }
-
-            app.endUndoGroup();
-
-            // Show result
-            if (removedCount > 0) {
-                alert("Removed " + removedCount + " instance(s) of '" + fxName + "'");
-            } else {
-                alert("Effect '" + fxName + "' not found on any selected layer.\nMake sure the name matches exactly as shown in AE.");
-            }
-        }, 45);
+        }, 96);
 
         btn(utilRow2, "Quick Trim", "Trim selected layers to 2 seconds centered on playhead (1 sec each side)", function(){
             var c = AE.requireComp();
@@ -1233,7 +1509,7 @@ function AE_Utility_Panel(thisObj) {
             if (shortLayers.length > 0) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
-        }, 45);
+        }, 96);
 
         addSeparator();
 
@@ -1242,17 +1518,22 @@ function AE_Utility_Panel(thisObj) {
 
         var twixtorSec = effectsSec.section.add("group");
         twixtorSec.orientation = "column";
-        twixtorSec.alignChildren = "fill";
+        twixtorSec.alignment = ["center", "center"];
+        twixtorSec.alignChildren = ["center", "center"];
         twixtorSec.margins = 0;
         twixtorSec.spacing = 4;
 
-        var twixtorHeaderBtn = twixtorSec.add("button", undefined, "Twixtor ▼");
-        twixtorHeaderBtn.preferredSize = [undefined, 20];
+        var twixtorHeaderBtn = twixtorSec.add("button", undefined, "Twixtor ▼", { style: "toolbutton" });
+        twixtorHeaderBtn.alignment = ["center", "center"];
+        twixtorHeaderBtn.preferredSize = [196, 20];
+        twixtorHeaderBtn.minimumSize = [196, 20];
+        twixtorHeaderBtn.maximumSize = [196, 20];
         twixtorHeaderBtn.helpTip = "Twixtor helper tools";
 
         var twixtorContent = twixtorSec.add("group");
         twixtorContent.orientation = "column";
-        twixtorContent.alignChildren = "left";
+        twixtorContent.alignment = ["center", "center"];
+        twixtorContent.alignChildren = ["center", "center"];
         twixtorContent.margins = 0;
         twixtorContent.spacing = 2;
         twixtorContent.visible = false;
@@ -1271,9 +1552,10 @@ function AE_Utility_Panel(thisObj) {
         // Align Keys button
         var twixtorRow = twixtorContent.add("group");
         twixtorRow.orientation = "row";
-        twixtorRow.alignChildren = "left";
+        twixtorRow.alignment = ["center", "center"];
+        twixtorRow.alignChildren = ["center", "center"];
         twixtorRow.margins = 0;
-        twixtorRow.spacing = 3;
+        twixtorRow.spacing = 4;
 
         btn(twixtorRow, "Seq Keys", "Snap selected keyframes to first key (1-frame spacing)", function(){
             var c=getComp(); if(!c) return;
@@ -1344,9 +1626,9 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
 
             resetProgressBar();
-        }, 55);
+        }, 96);
 
-        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 55);
+        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 96);
 
         addSeparator();
 
@@ -1355,26 +1637,28 @@ function AE_Utility_Panel(thisObj) {
 
         var anchorContent = anchorSec.section.add("group");
         anchorContent.orientation = "column";
-        anchorContent.alignChildren = ["center", "fill"];
+        anchorContent.alignment = ["center", "center"];
+        anchorContent.alignChildren = ["center", "center"];
         anchorContent.margins = 0;
         anchorContent.spacing = 2;
 
         // 3x3 Anchor Preset Grid
-        var presets = [["TL", "TC", "TR"], ["CL", "C", "CR"], ["BL", "BC", "BR"]];
+        var presets = [["TL", "TC", "TR"], ["CL", "CC", "CR"], ["BL", "BC", "BR"]];
 
         for (var row = 0; row < 3; row++) {
             var rowGroup = anchorContent.add("group");
             rowGroup.orientation = "row";
             rowGroup.alignment = ["center", "center"];
+            rowGroup.alignChildren = ["center", "center"];
             rowGroup.margins = 0;
             rowGroup.spacing = 2;
 
             for (var col = 0; col < 3; col++) {
                 var label = presets[row][col];
                 var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
-                b.preferredSize = [18, 18];
-                b.minimumSize = [18, 18];
-                b.maximumSize = [18, 18];
+                b.preferredSize = [24, 20];
+                b.minimumSize = [24, 20];
+                b.maximumSize = [24, 20];
 
                 try {
                     b.graphics.backgroundColor = b.graphics.newBrush(
@@ -1396,7 +1680,8 @@ function AE_Utility_Panel(thisObj) {
                         }
 
                         app.beginUndoGroup("Anchor Preset");
-                        setAnchorPreset(presetMode, savedLayerIndices);
+                        var actualMode = (presetMode === "CC") ? "C" : presetMode;
+                        setAnchorPreset(actualMode, savedLayerIndices);
                         app.endUndoGroup();
                     };
                 })(label);
@@ -1410,8 +1695,11 @@ function AE_Utility_Panel(thisObj) {
 
         var tRow1 = toolsSec.section.add("group");
         tRow1.orientation = "row";
-        tRow1.spacing = 3;
-        btn(tRow1, "Unpack", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 48);
+        tRow1.alignment = ["center", "center"];
+        tRow1.alignChildren = ["center", "center"];
+        tRow1.margins = 0;
+        tRow1.spacing = 4;
+        btn(tRow1, "Unpack", "Decompose precomp into parent composition (preserves keyframes & effects)", decomposeSelectedPrecomps_Advanced, 62);
 
         btn(tRow1, "Isolate", "Precompose each selected layer individually", function(){
             var comp = AE.requireComp();
@@ -1446,9 +1734,9 @@ function AE_Utility_Panel(thisObj) {
             }
 
             app.endUndoGroup();
-        }, 58);
+        }, 64);
 
-        btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 60);
+        btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 62);
 
         win.layout.layout(true);
         return win;

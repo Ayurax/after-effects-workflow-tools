@@ -28,6 +28,24 @@ var AE = {
 };
 
 // ============================================================================
+// BEAT DEBUG LOG HELPER
+// ============================================================================
+function beatLog(msg) {
+    try {
+        var f = new File(Folder.temp.fsName + "/beat_debug.log");
+        var opened = f.open("a");
+        if (!opened) {
+            alert("beatLog: FAILED TO OPEN FILE. path=" + f.fsName);
+            return;
+        }
+        f.writeln(new Date().toString() + " - " + msg);
+        f.close();
+    } catch (e) {
+        alert("beatLog CRASHED: " + e.message + " (line " + e.line + ")");
+    }
+}
+
+// ============================================================================
 // PROGRESS FEEDBACK HELPER
 // ============================================================================
 /**
@@ -58,6 +76,449 @@ function resetProgressBar() {
             app.setProgressBar(0, 100);
         } catch (e) {}
     }
+}
+
+// ============================================================================
+// BEAT DETECTION HELPERS
+// ============================================================================
+
+var lastAudioSourceDiag = null;
+
+function getPythonCommand() {
+    var pythonCmd = "python";
+    try {
+        var settingsFile = new File(File($.fileName).parent.fsName + "/beat_settings.json");
+        $.writeln("Beat Detect: Checking settings file: " + settingsFile.fsName + " (exists: " + settingsFile.exists + ")");
+        if (settingsFile.exists) {
+            var content = settingsFile.open("r") ? settingsFile.read() : "";
+            settingsFile.close();
+            if (content) {
+                var settings = JSON.parse(content);
+                if (settings && settings.pythonCmd) {
+                    pythonCmd = settings.pythonCmd;
+                    $.writeln("Beat Detect: Using configured Python: " + pythonCmd);
+                }
+            }
+        }
+    } catch (e) {
+        $.writeln("Beat Detect: Error reading settings: " + e.message);
+    }
+    $.writeln("Beat Detect: Final Python command: " + pythonCmd);
+    return pythonCmd;
+}
+
+function savePythonCommand(cmd) {
+    try {
+        var settingsFile = new File(File($.fileName).parent.fsName + "/beat_settings.json");
+        settingsFile.open("w");
+        settingsFile.write(JSON.stringify({ pythonCmd: cmd }));
+        settingsFile.close();
+    } catch (e) {}
+}
+
+function getAnalyzerScriptPath() {
+    var scriptFile = new File(File($.fileName).parent.fsName + "/audio_beat_detector.py");
+    return scriptFile;
+}
+
+function isAudioLayer(layer) {
+    try {
+        if (!layer) return false;
+
+        var audioChannel = null;
+
+        try {
+            audioChannel = layer.audio;
+        } catch (e1) {
+            $.writeln("Beat Detect: layer.audio access failed: " + e1.message);
+            return false;
+        }
+
+        if (!audioChannel) {
+            $.writeln("Beat Detect: layer has no audio channel");
+            return false;
+        }
+
+        try {
+            return audioChannel.enabled === true;
+        } catch (e2) {
+            $.writeln("Beat Detect: audio.enabled access failed: " + e2.message);
+            return false;
+        }
+
+    } catch (e) {
+        $.writeln("Beat Detect: isAudioLayer failed: " + e.message);
+        return false;
+    }
+}
+
+function getLayerSourceAudioPath(layer) {
+    lastAudioSourceDiag = null;
+    try {
+        var source = layer.source;
+        $.writeln("Beat Detect: Layer source: " + (source ? source.name : "null"));
+
+        lastAudioSourceDiag = {
+            layerName: layer.name,
+            sourceType: source ? (source instanceof CompItem ? "CompItem" : (source instanceof FootageItem ? "FootageItem" : typeof source)) : "null",
+            sourceName: source ? source.name : "no source",
+            mainSource: source && source.mainSource ? source.mainSource.toString() : "no mainSource",
+            sourceFile: source && source.file ? source.file.fsName : "no source.file",
+            sourceFileExists: source && source.file ? source.file.exists : "n/a",
+            mainSourceFile: source && source.mainSource && source.mainSource.file ? source.mainSource.file.fsName : "no mainSource.file",
+            mainSourceFileExists: source && source.mainSource && source.mainSource.file ? source.mainSource.file.exists : "n/a"
+        };
+
+        if (source && source.file && source.file.exists) {
+            $.writeln("Beat Detect: Found source file: " + source.file.fsName);
+            return source.file.fsName;
+        }
+        if (source && source.mainSource && source.mainSource.file && source.mainSource.file.exists) {
+            $.writeln("Beat Detect: Found mainSource file: " + source.mainSource.file.fsName);
+            return source.mainSource.file.fsName;
+        }
+        $.writeln("Beat Detect: No source file found");
+    } catch (e) {
+        $.writeln("Beat Detect: Error getting source path: " + e.message);
+        lastAudioSourceDiag = { error: e.message };
+    }
+    return null;
+}
+
+function renderLayerAudioToWav(layer, comp, wavPath) {
+    $.writeln("Beat Detect: Starting WAV render to " + wavPath);
+    
+    var rqItem = app.project.renderQueue.items.add(comp);
+    $.writeln("Beat Detect: Added render queue item");
+    
+    rqItem.applyTemplate("Audio Only");
+    
+    var hasAudioTemplate = false;
+    try {
+        var templates = app.project.renderQueue.templates;
+        for (var i = 1; i <= templates.length; i++) {
+            if (templates[i].name === "Audio Only") {
+                hasAudioTemplate = true;
+                break;
+            }
+        }
+    } catch (e) {
+        $.writeln("Beat Detect: Template check failed: " + e.message);
+    }
+    
+    if (!hasAudioTemplate) {
+        $.writeln("Beat Detect: No Audio Only template, configuring output module manually");
+        var om = rqItem.outputModules[1];
+        om.applyTemplate("WAV");
+        var omSettings = om.getSettings();
+        omSettings.audioEnabled = true;
+        omSettings.videoEnabled = false;
+        om.setSettings(omSettings);
+    }
+    
+    var rs = rqItem.renderSettings;
+    rs.startTime = layer.inPoint;
+    rs.endTime = layer.outPoint;
+    rqItem.renderSettings = rs;
+    $.writeln("Beat Detect: Render settings set - start: " + layer.inPoint + ", end: " + layer.outPoint);
+    
+    var om = rqItem.outputModules[1];
+    om.file = new File(wavPath);
+    
+    var renderSuccess = false;
+    try {
+        $.writeln("Beat Detect: Calling renderQueue.render()...");
+        app.project.renderQueue.render();
+        $.writeln("Beat Detect: renderQueue.render() returned");
+        
+        // Wait for render to complete by checking file
+        var wavFile = new File(wavPath);
+        var waitCount = 0;
+        while (!wavFile.exists && waitCount < 600) { // up to 60 seconds
+            $.sleep(100);
+            waitCount++;
+        }
+        
+        if (wavFile.exists) {
+            renderSuccess = true;
+            $.writeln("Beat Detect: WAV file created successfully: " + wavPath + " (size: " + wavFile.length + ")");
+        } else {
+            $.writeln("Beat Detect: ERROR - WAV file was not created after waiting");
+            renderSuccess = false;
+        }
+    } catch (e) {
+        $.writeln("Beat Detect: Render exception: " + e.message);
+        renderSuccess = false;
+    }
+    
+    rqItem.remove();
+    return renderSuccess;
+}
+
+function exportAudioForAnalysis(layer, comp) {
+    $.writeln("Beat Detect: Preparing audio for analysis...");
+    $.writeln("Beat Detect: About to call getLayerSourceAudioPath()");
+    var sourcePath = getLayerSourceAudioPath(layer);
+    $.writeln("Beat Detect: getLayerSourceAudioPath() returned: " + (sourcePath ? sourcePath : "null"));
+    if (sourcePath) {
+        $.writeln("Beat Detect: Using source audio file directly: " + sourcePath);
+        return sourcePath;
+    }
+    
+    $.writeln("Beat Detect: No direct file-backed audio source found for this layer; render-queue fallback is disabled because it can hang the AE UI thread.");
+    return null;
+}
+
+function runBeatAnalyzer(audioPath, sensitivity, minGap, progressWin) {
+    beatLog("runBeatAnalyzer: started");
+    var base = File($.fileName).parent.fsName;
+    var stamp = (new Date()).getTime();
+
+    var pythonCmd  = getPythonCommand();
+    beatLog("getPythonCommand returned: " + pythonCmd);
+    var scriptPath = getAnalyzerScriptPath();
+    beatLog("getAnalyzerScriptPath returned: " + scriptPath.fsName + " exists=" + scriptPath.exists);
+    var jsonPath   = new File(base + "/temp_beat_result_" + stamp + ".json");
+    var outLog     = new File(base + "/temp_beat_stdout_" + stamp + ".txt");
+    var errLog     = new File(base + "/temp_beat_stderr_" + stamp + ".txt");
+    var exitFile   = new File(base + "/temp_beat_exit_" + stamp + ".txt");
+    var doneFile   = new File(base + "/temp_beat_done_" + stamp + ".flag");
+    var ps1Path    = new File(base + "/temp_beat_launcher_" + stamp + ".ps1");
+
+    function psQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+
+    var pyArgs = [
+        psQuote(scriptPath.fsName),
+        psQuote(audioPath),
+        "--sensitivity", sensitivity,
+        "--min-gap", minGap,
+        "--json", psQuote(jsonPath.fsName)
+    ].join(" ");
+
+    var ps1 =
+        '$ErrorActionPreference = "Continue"\r\n' +
+        '$psi = New-Object System.Diagnostics.ProcessStartInfo\r\n' +
+        '$psi.FileName = ' + psQuote(pythonCmd) + '\r\n' +
+        '$psi.Arguments = ' + psQuote(pyArgs) + '\r\n' +
+        '$psi.UseShellExecute = $false\r\n' +
+        '$psi.RedirectStandardOutput = $true\r\n' +
+        '$psi.RedirectStandardError = $true\r\n' +
+        '$psi.CreateNoWindow = $true\r\n' +
+        '$proc = [System.Diagnostics.Process]::Start($psi)\r\n' +
+        '$stdout = $proc.StandardOutput.ReadToEnd()\r\n' +
+        '$stderr = $proc.StandardError.ReadToEnd()\r\n' +
+        '$proc.WaitForExit()\r\n' +
+        'Set-Content -Path ' + psQuote(outLog.fsName) + ' -Value $stdout\r\n' +
+        'Set-Content -Path ' + psQuote(errLog.fsName) + ' -Value $stderr\r\n' +
+        'Set-Content -Path ' + psQuote(exitFile.fsName) + ' -Value $proc.ExitCode\r\n' +
+        'Set-Content -Path ' + psQuote(doneFile.fsName) + ' -Value "1"\r\n';
+
+    beatLog("ps1 string built, length=" + ps1.length);
+    ps1Path.open("w"); ps1Path.write(ps1); ps1Path.close();
+    beatLog("ps1 file written");
+
+    $.writeln("Beat Detect: Python exe: " + pythonCmd);
+    $.writeln("Beat Detect: Analyzer script: " + scriptPath.fsName);
+    $.writeln("Beat Detect: Audio input: " + audioPath);
+    $.writeln("Beat Detect: Output JSON: " + jsonPath.fsName);
+
+    var launchCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ps1Path.fsName + '"';
+    beatLog("Launching: " + launchCmd);
+
+    var detachedCmd = 'cmd.exe /c start "" /min ' + launchCmd;
+    system.callSystem(detachedCmd);
+    beatLog("callSystem launch issued");
+
+    var launched = true;
+
+    var TIMEOUT_MS = 120000, POLL_MS = 100, elapsed = 0;
+    beatLog("Entering polling loop");
+    while (elapsed < TIMEOUT_MS && !doneFile.exists) {
+        if (progressWin && progressWin.cancelled) {
+            $.writeln("Beat Detect: Cancelled by user during polling");
+            break;
+        }
+        $.sleep(POLL_MS);
+        elapsed += POLL_MS;
+        if (progressWin && elapsed % 1000 < POLL_MS) {
+            try {
+                var pct = Math.min(90, 50 + Math.floor((elapsed / TIMEOUT_MS) * 40));
+                progressWin.children[1].value = pct;
+                progressWin.children[0].text = "Analyzing audio... " + pct + "%";
+                progressWin.update();
+            } catch (e) {}
+        }
+    }
+    beatLog("Exited polling loop. elapsed=" + elapsed + " doneFile.exists=" + doneFile.exists + " cancelled=" + (progressWin && progressWin.cancelled));
+
+    if (progressWin && progressWin.cancelled) {
+        // Clean up partial files
+        var filesToRemove = [ps1Path, jsonPath, outLog, errLog, exitFile, doneFile];
+        for (var fi = 0; fi < filesToRemove.length; fi++) {
+            try {
+                if (filesToRemove[fi].exists) filesToRemove[fi].remove();
+            } catch (e) {}
+        }
+        return { success: false, error: "Cancelled by user." };
+    }
+
+    function readAndRemove(f) {
+        if (!f.exists) return "";
+        f.open("r"); var c = f.read(); f.close(); f.remove();
+        return c;
+    }
+
+    var stdoutTxt = readAndRemove(outLog);
+    var stderrTxt = readAndRemove(errLog);
+    var exitTxt   = readAndRemove(exitFile);
+    var timedOut  = !doneFile.exists;
+    if (doneFile.exists) doneFile.remove();
+    if (ps1Path.exists) ps1Path.remove();
+
+    $.writeln("Beat Detect: timedOut=" + timedOut + " exitCode=" + exitTxt);
+    if (stderrTxt) $.writeln("Beat Detect: stderr:\n" + stderrTxt);
+
+    if (timedOut) {
+        return { success: false, error: "Analyzer timed out after " + (TIMEOUT_MS/1000) + "s.",
+                 diag: { pythonCmd: pythonCmd, script: scriptPath.fsName, audio: audioPath,
+                         ps1Path: ps1Path.fsName, exitCode: null, stderr: stderrTxt } };
+    }
+
+    if (String(exitTxt).replace(/\s/g, "") !== "0") {
+        return { success: false, error: "Python exited with code " + exitTxt + ". " + (stderrTxt || "(no stderr)"),
+                 diag: { pythonCmd: pythonCmd, script: scriptPath.fsName, audio: audioPath,
+                         ps1Path: ps1Path.fsName, exitCode: exitTxt, stderr: stderrTxt } };
+    }
+
+    if (!jsonPath.exists || jsonPath.length === 0) {
+        return { success: false, error: "Python exited 0 but wrote no JSON. stdout: " + stdoutTxt,
+                 diag: { pythonCmd: pythonCmd, script: scriptPath.fsName, audio: audioPath,
+                         ps1Path: ps1Path.fsName, exitCode: exitTxt, stderr: stderrTxt } };
+    }
+
+    jsonPath.open("r"); var content = jsonPath.read(); jsonPath.close(); jsonPath.remove();
+    try {
+        return JSON.parse(content);
+    } catch (e) {
+        return { success: false, error: "JSON parse failed: " + e.message,
+                 diag: { pythonCmd: pythonCmd, script: scriptPath.fsName, audio: audioPath, ps1Path: ps1Path.fsName } };
+    }
+}
+
+function clearPreviousBeatMarkers(layer) {
+    var markerProp = layer.property("ADBE Marker");
+    if (!markerProp) return;
+    var toRemove = [];
+    for (var i = 1; i <= markerProp.numKeys; i++) {
+        var marker = markerProp.keyValue(i);
+        if (marker && (marker.comment === "BASS" || marker.comment === "TREBLE" || marker.comment === "BEAT_BASS" || marker.comment === "BEAT_TREBLE")) {
+            toRemove.push(i);
+        }
+    }
+    for (var j = toRemove.length - 1; j >= 0; j--) {
+        markerProp.removeKey(toRemove[j]);
+    }
+}
+
+function createBeatMarkers(layer, comp, events) {
+    var markerProp = layer.property("ADBE Marker");
+    if (!markerProp) {
+        $.writeln("Beat Detect: ERROR - Layer has no marker property");
+        return 0;
+    }
+    
+    var frameDur = comp.frameDuration;
+    var created = 0;
+    var bassCount = 0;
+    var trebleCount = 0;
+    
+    for (var i = 0; i < events.length; i++) {
+        var evt = events[i];
+        var t = evt.time;
+        var type = evt.type;
+        
+        var frameTime = Math.round(t / frameDur) * frameDur;
+        
+        if (frameTime < layer.inPoint - 0.001 || frameTime > layer.outPoint + 0.001) {
+            $.writeln("Beat Detect: Skipping marker at " + frameTime + " (outside layer range)");
+            continue;
+        }
+        
+        var marker = new MarkerValue("");
+        marker.comment = type === "BASS" ? "BASS" : "TREBLE";
+        marker.label = type === "BASS" ? 1 : 4;
+        marker.duration = 0;
+        marker.chapter = false;
+        marker.url = "";
+        marker.frameTarget = false;
+        marker.cuePointType = 0;
+        
+        try {
+            markerProp.setValueAtTime(frameTime, marker);
+            created++;
+            if (type === "BASS") bassCount++; else trebleCount++;
+            $.writeln("Beat Detect: Created " + type + " marker at " + frameTime);
+        } catch (e) {
+            $.writeln("Beat Detect: Failed to create marker at " + frameTime + ": " + e.message);
+        }
+    }
+    
+    $.writeln("Beat Detect: Marker creation complete - Bass: " + bassCount + ", Treble: " + trebleCount);
+    return created;
+}
+
+function detectBeats(comp, layer, sensitivity, minGap, progressWin) {
+    beatLog("detectBeats: started");
+    $.writeln("Beat Detect: Starting detection pipeline...");
+    
+    if (!isAudioLayer(layer)) {
+        $.writeln("Beat Detect: ERROR - Layer is not an enabled audio layer");
+        return { success: false, error: "Layer is not an enabled audio layer." };
+    }
+    $.writeln("Beat Detect: Audio layer validated");
+    
+    var audioPath = exportAudioForAnalysis(layer, comp);
+    beatLog("exportAudioForAnalysis returned: " + audioPath);
+    if (!audioPath) {
+        $.writeln("Beat Detect: ERROR - Could not access audio source");
+        return {
+            success: false,
+            error: "Could not access audio source. Select a layer with a direct file-backed audio source (e.g. an imported WAV/MP3), not a rendered/nested/precomp source.",
+            diag: lastAudioSourceDiag
+        };
+    }
+    $.writeln("Beat Detect: Audio source ready: " + audioPath);
+    
+    var result = runBeatAnalyzer(audioPath, sensitivity, minGap, progressWin);
+    
+    // Only clean up temp WAV files, never the original source
+    var tempAudio = new File(audioPath);
+    if (tempAudio.exists && tempAudio.fsName.indexOf("temp_beat_audio_") !== -1) {
+        tempAudio.remove();
+        $.writeln("Beat Detect: Cleaned up temp audio file");
+    }
+    
+    if (!result) {
+        $.writeln("Beat Detect: ERROR - Beat analyzer failed or returned no data");
+        return { success: false, error: "Beat analyzer failed or returned no data." };
+    }
+    
+    if (result.error) {
+        $.writeln("Beat Detect: ERROR - Python returned error: " + result.error);
+        return { success: false, error: result.error };
+    }
+    
+    if (!result || !result.length) {
+        $.writeln("Beat Detect: No beats detected in audio");
+        return { success: true, count: 0 };
+    }
+    
+    $.writeln("Beat Detect: Got " + result.length + " detections, creating markers...");
+    clearPreviousBeatMarkers(layer);
+    var created = createBeatMarkers(layer, comp, result);
+    
+    $.writeln("Beat Detect: Created " + created + " markers");
+    return { success: true, count: created };
 }
 
 // ============================================================================
@@ -1510,6 +1971,106 @@ function AE_Utility_Panel(thisObj) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
         }, 96);
+
+        btn(utilRow2, "Beats", "Detect BASS/TREBLE onsets on selected audio layer", function(){
+            try {
+                beatLog("=== Beats clicked ===");
+                var c = AE.requireComp();
+                if (!c) return;
+
+                var sel = c.selectedLayers;
+                if (sel.length !== 1) {
+                    alert("Select exactly one audio layer.");
+                    return;
+                }
+
+                var layer = sel[0];
+                if (!isAudioLayer(layer)) {
+                    alert("Select an audio layer.");
+                    return;
+                }
+                beatLog("isAudioLayer result: " + isAudioLayer(layer));
+
+                // Show progress dialog
+                var progressWin = new Window("palette", "Beat Detection", undefined, {closeButton: false});
+                progressWin.orientation = "column";
+                progressWin.alignChildren = "fill";
+                progressWin.margins = 15;
+                progressWin.spacing = 10;
+                
+                var statusText = progressWin.add("statictext", undefined, "Validating audio layer...");
+                statusText.alignment = ["center", "center"];
+                
+                var progressBar = progressWin.add("progressbar", undefined, 0, 100);
+                progressBar.preferredSize = [300, 20];
+                
+                var cancelRow = progressWin.add("group");
+                cancelRow.orientation = "row";
+                cancelRow.alignment = ["center", "center"];
+                cancelRow.spacing = 6;
+                
+                progressWin.cancelled = false;
+                var cancelBtn = cancelRow.add("button", undefined, "Cancel", { style: "toolbutton" });
+                cancelBtn.preferredSize = [80, 22];
+                cancelBtn.minimumSize = [80, 22];
+                cancelBtn.maximumSize = [80, 22];
+                cancelBtn.onClick = function() {
+                    progressWin.cancelled = true;
+                };
+                
+                progressWin.show();
+                progressWin.update();
+
+                app.beginUndoGroup("AE Panel - Beat Detect");
+
+                var sensitivity = "medium";
+                var minGap = 0.12;
+
+                // Stage 1: Validate
+                progressBar.value = 10;
+                statusText.text = "Validating audio...";
+                progressWin.update();
+
+                // Stage 2: Prepare audio
+                progressBar.value = 20;
+                statusText.text = "Preparing audio...";
+                progressWin.update();
+
+                var result = detectBeats(c, layer, sensitivity, minGap, progressWin);
+
+                // Stage 4: Create markers
+                progressBar.value = 90;
+                statusText.text = "Creating markers...";
+                progressWin.update();
+
+                app.endUndoGroup();
+
+                progressBar.value = 100;
+                statusText.text = "Complete";
+                progressWin.update();
+                $.sleep(300);
+                progressWin.close();
+
+                if (!result.success) {
+                    var msg = "Beat Detect failed: " + (result.error || "Unknown error");
+                    if (result.diag) {
+                        msg += "\n\nDiagnostic info:\n";
+                        for (var dk in result.diag) {
+                            try {
+                                msg += dk + ": " + result.diag[dk] + "\n";
+                            } catch (e) {}
+                        }
+                    }
+                    alert(msg);
+                } else if (result.count === 0) {
+                    alert("No beats detected.");
+                } else {
+                    alert("Beat Detect complete: " + result.count + " markers created.");
+                }
+            } catch (e) {
+                alert("BEATS HANDLER CRASHED: " + e.message + " (line " + e.line + ")\n\n" + e.stack);
+            }
+        }, 62);
 
         addSeparator();
 

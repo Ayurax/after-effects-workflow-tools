@@ -702,6 +702,191 @@ function fitPrecompToLayerSpan(precomp, layer, originalIn, originalOut, original
     precomp.duration = span;
 }
 
+function askBeatMarkerOptions() {
+    var dialog = new Window("dialog", "Beat Markers");
+    dialog.orientation = "column";
+    dialog.alignChildren = "fill";
+    dialog.margins = 14;
+    dialog.spacing = 9;
+
+    dialog.add("statictext", undefined, "Detect strong audio peaks and add composition markers.");
+
+    var thresholdRow = dialog.add("group");
+    thresholdRow.orientation = "row";
+    thresholdRow.alignChildren = ["left", "center"];
+    thresholdRow.add("statictext", undefined, "Sensitivity (% of loudest peak)");
+    var thresholdInput = thresholdRow.add("edittext", undefined, "35");
+    thresholdInput.characters = 5;
+
+    var spacingRow = dialog.add("group");
+    spacingRow.orientation = "row";
+    spacingRow.alignChildren = ["left", "center"];
+    spacingRow.add("statictext", undefined, "Minimum spacing (seconds)");
+    var spacingInput = spacingRow.add("edittext", undefined, "0.20");
+    spacingInput.characters = 5;
+
+    var note = dialog.add("statictext", undefined, "Analyzes enabled audio across its timeline span.");
+    note.alignment = ["left", "center"];
+
+    var buttons = dialog.add("group");
+    buttons.orientation = "row";
+    buttons.alignment = ["right", "center"];
+    buttons.spacing = 6;
+    buttons.add("button", undefined, "Cancel", { name: "cancel" });
+    buttons.add("button", undefined, "Create Markers", { name: "ok" });
+
+    if (dialog.show() !== 1) return null;
+
+    var threshold = parseFloat(thresholdInput.text);
+    var spacing = parseFloat(spacingInput.text);
+    if (isNaN(threshold) || threshold < 1 || threshold > 100 || isNaN(spacing) || spacing < 0) {
+        alert("Enter a sensitivity from 1 to 100 and a spacing of 0 or more seconds.");
+        return null;
+    }
+    return { threshold: threshold / 100, minSpacing: spacing };
+}
+
+function addBeatMarkers(comp, options) {
+    var originalWorkAreaStart = comp.workAreaStart;
+    var originalWorkAreaDuration = comp.workAreaDuration;
+    var originalLayerCount = comp.numLayers;
+    var audioAmplitudeLayer = null;
+    var markersCreated = 0;
+
+    try {
+        var hasSoloAudio = false;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var candidate = comp.layer(i);
+            try {
+                if (candidate.hasAudio && candidate.audioEnabled && candidate.solo) hasSoloAudio = true;
+            } catch (eSolo) {}
+        }
+
+        var audioStart = comp.duration;
+        var audioEnd = 0;
+        var foundAudio = false;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var audioLayer = comp.layer(i);
+            try {
+                if (!audioLayer.hasAudio || !audioLayer.audioEnabled || (hasSoloAudio && !audioLayer.solo)) continue;
+                audioStart = Math.min(audioStart, audioLayer.inPoint);
+                audioEnd = Math.max(audioEnd, audioLayer.outPoint);
+                foundAudio = true;
+            } catch (eAudio) {}
+        }
+
+        if (!foundAudio) throw new Error("No enabled audio layers were found in this composition.");
+        audioStart = Math.max(0, audioStart);
+        audioEnd = Math.min(comp.duration, audioEnd);
+        if (audioEnd <= audioStart) throw new Error("The audio layers do not overlap the composition duration.");
+
+        comp.workAreaStart = audioStart;
+        comp.workAreaDuration = audioEnd - audioStart;
+
+        // The menu label is case-sensitive in ExtendScript: the UI command uses lowercase "to".
+        var commandId = app.findMenuCommandId("Convert Audio to Keyframes");
+        if (!commandId) commandId = app.findMenuCommandId("Convert Audio To Keyframes");
+        // Legacy command ID used by After Effects 2021 and earlier localized builds.
+        if (!commandId && parseFloat(app.version) < 22) commandId = 5014;
+        if (!commandId) throw new Error("After Effects could not find the Convert Audio To Keyframes command.");
+        app.executeCommand(commandId);
+
+        if (comp.numLayers <= originalLayerCount) throw new Error("After Effects did not create an Audio Amplitude layer.");
+        audioAmplitudeLayer = comp.layer(1);
+        if (!audioAmplitudeLayer || audioAmplitudeLayer.name !== "Audio Amplitude") {
+            audioAmplitudeLayer = null;
+            for (var j = 1; j <= comp.numLayers; j++) {
+                if (comp.layer(j).name === "Audio Amplitude") {
+                    audioAmplitudeLayer = comp.layer(j);
+                    break;
+                }
+            }
+        }
+        if (!audioAmplitudeLayer) throw new Error("Could not locate the generated Audio Amplitude layer.");
+
+        var effects = audioAmplitudeLayer.property("ADBE Effect Parade");
+        var amplitudeProperty = null;
+        for (var e = 1; effects && e <= effects.numProperties; e++) {
+            var effect = effects.property(e);
+            if (effect.name === "Both Channels") {
+                amplitudeProperty = effect.property("ADBE Slider Control-0001") || effect.property(1);
+                break;
+            }
+        }
+        if (!amplitudeProperty || amplitudeProperty.numKeys < 3) {
+            throw new Error("Could not read the Both Channels audio keyframes.");
+        }
+
+        var samples = [];
+        var maxValue = 0;
+        for (var k = 1; k <= amplitudeProperty.numKeys; k++) {
+            var value = amplitudeProperty.keyValue(k);
+            samples.push({ time: amplitudeProperty.keyTime(k), value: value });
+            if (value > maxValue) maxValue = value;
+        }
+        if (maxValue <= 0) throw new Error("No audio peaks were detected in the work area.");
+
+        var thresholdValue = maxValue * options.threshold;
+        var candidates = [];
+        for (var s = 1; s < samples.length - 1; s++) {
+            var before = samples[s - 1].value;
+            var current = samples[s].value;
+            var after = samples[s + 1].value;
+            if (current >= thresholdValue && current >= before && current >= after && (current > before || current > after)) {
+                candidates.push({ time: samples[s].time, value: current });
+            }
+        }
+
+        candidates.sort(function (a, b) { return b.value - a.value; });
+        var chosen = [];
+        for (var c = 0; c < candidates.length; c++) {
+            var farEnough = true;
+            for (var chosenIndex = 0; chosenIndex < chosen.length; chosenIndex++) {
+                if (Math.abs(candidates[c].time - chosen[chosenIndex].time) < options.minSpacing) {
+                    farEnough = false;
+                    break;
+                }
+            }
+            if (farEnough) chosen.push(candidates[c]);
+        }
+        chosen.sort(function (a, b) { return a.time - b.time; });
+        if (chosen.length === 0) throw new Error("No peaks met the sensitivity setting. Try lowering sensitivity.");
+
+        var markerProperty = comp.markerProperty;
+        for (var oldMarker = markerProperty.numKeys; oldMarker >= 1; oldMarker--) {
+            var oldValue = markerProperty.keyValue(oldMarker);
+            var oldComment = oldValue.comment;
+            var oldParameters = oldValue.getParameters();
+            var isBeatMarker = oldComment && oldComment.indexOf("AE Utility Beat ") === 0;
+            for (var paramIndex = 0; oldParameters && paramIndex < oldParameters.length; paramIndex++) {
+                if (oldParameters[paramIndex][0] === "AEUtilityBeatMarker") isBeatMarker = true;
+            }
+            if (isBeatMarker) markerProperty.removeKey(oldMarker);
+        }
+
+        for (var m = 0; m < chosen.length; m++) {
+            var marker = new MarkerValue(String(m + 1));
+            marker.setParameters([["AEUtilityBeatMarker", "1"]]);
+            var markerTime = chosen[m].time;
+            for (var existing = 1; existing <= markerProperty.numKeys; existing++) {
+                if (Math.abs(markerProperty.keyTime(existing) - markerTime) < comp.frameDuration * 0.01) {
+                    markerTime += comp.frameDuration * 0.05;
+                    break;
+                }
+            }
+            markerProperty.setValueAtTime(markerTime, marker);
+            markersCreated++;
+        }
+    } finally {
+        if (audioAmplitudeLayer) {
+            try { audioAmplitudeLayer.remove(); } catch (eRemoveAmplitude) {}
+        }
+        comp.workAreaStart = originalWorkAreaStart;
+        comp.workAreaDuration = originalWorkAreaDuration;
+    }
+    return markersCreated;
+}
+
 // ============================================================================
 // CHARACTER SEPARATION HELPER (CHARS)
 // ============================================================================
@@ -1247,6 +1432,29 @@ function AE_Utility_Panel(thisObj) {
                 alert("These layers are shorter than 2 seconds and were skipped:\n" + shortLayers.join("\n"));
             }
         }, 96);
+
+        var beatRow = timingSec.section.add("group");
+        beatRow.orientation = "row";
+        beatRow.alignment = ["center", "center"];
+        beatRow.alignChildren = ["center", "center"];
+        beatRow.margins = 0;
+        beatRow.spacing = 4;
+        btn(beatRow, "Beat Markers", "Analyze enabled audio and add markers at strong rhythmic peaks", function(){
+            var comp = AE.requireComp();
+            if (!comp) return;
+            var options = askBeatMarkerOptions();
+            if (!options) return;
+
+            app.beginUndoGroup("AE Panel - Beat Markers");
+            try {
+                var count = addBeatMarkers(comp, options);
+                alert("Created " + count + " beat markers.");
+            } catch (err) {
+                alert("Beat marker error: " + err.message);
+            } finally {
+                app.endUndoGroup();
+            }
+        }, 196);
 
         // ===== EFFECTS =====
         var effectsSec = addSection("Effects");

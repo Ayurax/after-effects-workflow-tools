@@ -647,6 +647,61 @@ function sequenceSelectedLayers() {
     app.endUndoGroup();
 }
 
+// Shift keyframes on a layer when rebasing it to the start of a trimmed precomp.
+function shiftPropertyKeyframes(prop, timeOffset) {
+    if (!prop) return;
+
+    if (prop.propertyType === PropertyType.PROPERTY) {
+        if (!prop.numKeys) return;
+
+        var keys = [];
+        for (var k = 1; k <= prop.numKeys; k++) {
+            var key = {
+                time: prop.keyTime(k) + timeOffset,
+                value: prop.keyValue(k),
+                inType: prop.keyInInterpolationType(k),
+                outType: prop.keyOutInterpolationType(k)
+            };
+            try { key.inEase = prop.keyInTemporalEase(k); key.outEase = prop.keyOutTemporalEase(k); } catch (eEase) {}
+            try { key.inTangent = prop.keyInSpatialTangent(k); key.outTangent = prop.keyOutSpatialTangent(k); } catch (eTangent) {}
+            try { key.spatialContinuous = prop.keySpatialContinuous(k); key.spatialAutoBezier = prop.keySpatialAutoBezier(k); } catch (eSpatial) {}
+            try { key.temporalContinuous = prop.keyTemporalContinuous(k); key.temporalAutoBezier = prop.keyTemporalAutoBezier(k); } catch (eTemporal) {}
+            try { key.roving = prop.keyRoving(k); } catch (eRoving) {}
+            keys.push(key);
+        }
+
+        for (var removeIndex = prop.numKeys; removeIndex >= 1; removeIndex--) prop.removeKey(removeIndex);
+        for (var i = 0; i < keys.length; i++) {
+            var newIndex = prop.addKey(keys[i].time);
+            prop.setValueAtKey(newIndex, keys[i].value);
+            prop.setInterpolationTypeAtKey(newIndex, keys[i].inType, keys[i].outType);
+            try { prop.setTemporalEaseAtKey(newIndex, keys[i].inEase, keys[i].outEase); } catch (eSetEase) {}
+            try { prop.setSpatialTangentsAtKey(newIndex, keys[i].inTangent, keys[i].outTangent); } catch (eSetTangent) {}
+            try { prop.setSpatialContinuousAtKey(newIndex, keys[i].spatialContinuous); } catch (eSetSpatial) {}
+            try { prop.setSpatialAutoBezierAtKey(newIndex, keys[i].spatialAutoBezier); } catch (eSetAutoSpatial) {}
+            try { prop.setTemporalContinuousAtKey(newIndex, keys[i].temporalContinuous); } catch (eSetTemporal) {}
+            try { prop.setTemporalAutoBezierAtKey(newIndex, keys[i].temporalAutoBezier); } catch (eSetAutoTemporal) {}
+            try { prop.setRovingAtKey(newIndex, keys[i].roving); } catch (eSetRoving) {}
+        }
+        return;
+    }
+
+    for (var p = 1; p <= prop.numProperties; p++) {
+        shiftPropertyKeyframes(prop.property(p), timeOffset);
+    }
+}
+
+function fitPrecompToLayerSpan(precomp, layer, originalIn, originalOut, originalStart) {
+    var span = originalOut - originalIn;
+    if (!precomp || !layer || span <= 0) return;
+
+    shiftPropertyKeyframes(layer, -originalIn);
+    layer.startTime = originalStart - originalIn;
+    layer.inPoint = 0;
+    layer.outPoint = span;
+    precomp.duration = span;
+}
+
 // ============================================================================
 // CHARACTER SEPARATION HELPER (CHARS)
 // ============================================================================
@@ -660,231 +715,75 @@ function separateTextToCharacters() {
     if (!comp) return;
 
     var sel = comp.selectedLayers;
-    if (!sel || sel.length === 0) {
-        alert("Please select a text layer.");
-        return;
-    }
-    if (sel.length > 1) {
-        alert("Please select only one text layer.");
+    if (!sel || sel.length !== 1) {
+        alert(sel && sel.length > 1 ? "Please select only one text layer." : "Please select a text layer.");
         return;
     }
 
     var origLayer = sel[0];
-    var textProps = origLayer.property("ADBE Text Properties");
-    var textProp = textProps ? textProps.property("ADBE Text Document") : null;
+    var textProp = origLayer.property("ADBE Text Properties");
+    textProp = textProp ? textProp.property("ADBE Text Document") : null;
     if (!textProp) {
         alert("Selected layer is not a text layer.");
         return;
     }
 
-    var origTextDoc = textProp.value;
-    var originalText = origTextDoc.text;
+    var originalText = textProp.value.text;
     if (!originalText || originalText.length === 0) {
         alert("Selected text layer is empty.");
         return;
     }
 
     app.beginUndoGroup("AE Panel - Chars");
-
-    var measureLayer = null;
+    var createdLayers = [];
     try {
-        var renderTime = comp.time;
-        var is3D = origLayer.threeDLayer;
-        var origPos = origLayer.position.value;
-        var origAnchor = origLayer.anchorPoint.value;
-        var origScale = origLayer.scale.value;
-        var origRot = is3D ? 0 : origLayer.rotation.value;
-        var origOpacity = origLayer.opacity.value;
-        var origInPoint = origLayer.inPoint;
-        var origOutPoint = origLayer.outPoint;
-        var origStartTime = origLayer.startTime;
-        var origParent = origLayer.parent;
-        var origLabel = origLayer.label;
-        var origJustification = origTextDoc.justification;
+        var textProps = origLayer.property("ADBE Text Properties");
+        var animators = textProps.property("ADBE Text Animators");
 
-        var scaleX = origScale[0] / 100;
-        var scaleY = origScale[1] / 100;
-        var rotRad = origRot * Math.PI / 180;
-        var cosRot = Math.cos(rotRad);
-        var sinRot = Math.sin(rotRad);
+        // Each duplicate keeps the complete text run so After Effects preserves
+        // the font's kerning, ligatures, contextual forms, and glyph advances.
+        // Text animators hide every character except the selected index.
+        for (var i = 0; i < originalText.length; i++) {
+            var ch = originalText.charAt(i);
+            if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") continue;
 
-        // Create a single temporary text layer for prefix measurements
-        measureLayer = comp.layers.addText("");
-        var measureProp = measureLayer.property("ADBE Text Properties").property("ADBE Text Document");
-        var measureDoc = textProp.value;
+            var charLayer = origLayer.duplicate();
+            createdLayers.push(charLayer);
+            charLayer.name = ch;
 
-        // Split text into individual lines to support multi-line text accurately
-        var lines = originalText.split(/\r\n|[\r\n]/);
-        var createdLayers = [];
+            var charTextProps = charLayer.property("ADBE Text Properties");
+            var charAnimators = charTextProps.property("ADBE Text Animators");
 
-        for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-            var lineText = lines[lineIdx];
-            if (!lineText || lineText.length === 0) continue;
+            var hideAnimator = charAnimators.addProperty("ADBE Text Animator");
+            hideAnimator.name = "Hide Other Characters";
+            var hideAnimatorIndex = hideAnimator.propertyIndex;
+            var selectors = hideAnimator.property("ADBE Text Selectors");
+            var targetSelector = selectors.addProperty("ADBE Text Selector");
+            var advanced = targetSelector.property("ADBE Text Range Advanced");
+            advanced.property("ADBE Text Selector Mode").setValue(2); // Subtract
+            advanced.property("ADBE Text Range Units").setValue(2); // Index
+            targetSelector.property("ADBE Text Index Start").setValue(i);
+            targetSelector.property("ADBE Text Index End").setValue(i + 1);
+            advanced.property("ADBE Text Selector Smoothness").setValue(0);
+            // Adding a selector invalidates references to indexed child groups.
+            hideAnimator = charAnimators.property(hideAnimatorIndex);
+            hideAnimator.property("ADBE Text Animator Properties")
+                .addProperty("ADBE Text Opacity").setValue(0);
 
-            // Build newlines prefix to place measurement on the correct line baseline
-            var linePrefixNewlines = "";
-            for (var n = 0; n < lineIdx; n++) {
-                linePrefixNewlines += "\r";
-            }
-
-            // Step 1: Measure line bounds with original justification
-            measureDoc.justification = origJustification;
-            measureDoc.text = linePrefixNewlines + lineText;
-            measureProp.setValue(measureDoc);
-            var lineBoundsOrig = measureLayer.sourceRectAtTime(renderTime, false);
-
-            // Step 2: Measure cumulative prefix advances within the line using LEFT_JUSTIFY
-            // to ensure a stable coordinate origin for glyph advance calculation
-            measureDoc.justification = ParagraphJustification.LEFT_JUSTIFY;
-
-            // Find first non-space character in the line
-            var firstNonSpace = -1;
-            for (var c = 0; c < lineText.length; c++) {
-                var testCh = lineText.charAt(c);
-                if (testCh !== " " && testCh !== "\t") {
-                    firstNonSpace = c;
-                    break;
-                }
-            }
-            if (firstNonSpace === -1) continue; // entire line is whitespace
-
-            // Measure baseline offset for this line relative to line 0
-            var lineBaseline = 0;
-            if (lineIdx > 0) {
-                var refCh = lineText.charAt(firstNonSpace);
-                measureDoc.text = refCh;
-                measureProp.setValue(measureDoc);
-                var refRect0 = measureLayer.sourceRectAtTime(renderTime, false);
-
-                measureDoc.text = linePrefixNewlines + refCh;
-                measureProp.setValue(measureDoc);
-                var refRectL = measureLayer.sourceRectAtTime(renderTime, false);
-
-                lineBaseline = refRectL.top - refRect0.top;
-            }
-
-            // Measure reference left position of first non-space character
-            measureDoc.text = lineText.substring(0, firstNonSpace + 1);
-            measureProp.setValue(measureDoc);
-            var baseRect = measureLayer.sourceRectAtTime(renderTime, false);
-            var baseLeft = baseRect.left;
-
-            // Step 3: Iterate through characters on this line
-            for (var charIdx = 0; charIdx < lineText.length; charIdx++) {
-                var ch = lineText.charAt(charIdx);
-
-                // Skip creating layers for whitespace characters; their advance is already captured
-                if (ch === " " || ch === "\t") continue;
-
-                // Measure prefix up to and including this character
-                measureDoc.text = lineText.substring(0, charIdx + 1);
-                measureProp.setValue(measureDoc);
-                var prefixRect = measureLayer.sourceRectAtTime(renderTime, false);
-                var rightEdge = prefixRect.left + prefixRect.width;
-
-                // Create independent text layer for this character
-                var charLayer = comp.layers.addText(ch);
-                createdLayers.push(charLayer);
-
-                // Copy original text document styling and set text to this character
-                var charProp = charLayer.property("ADBE Text Properties").property("ADBE Text Document");
-                var charDoc = textProp.value;
-                charDoc.text = ch;
-                charProp.setValue(charDoc);
-
-                // Measure character bounds
-                var charBounds = charLayer.sourceRectAtTime(renderTime, false);
-
-                // Calculate horizontal offset within the line
-                var charLeftInLine = rightEdge - charBounds.width;
-                var charOffsetX = charLeftInLine - baseLeft;
-
-                // Local position of character in original layer space
-                var charLocalLeft = lineBoundsOrig.left + charOffsetX;
-
-                // Set character anchor point to center of the character
-                var charCenterX = charBounds.left + charBounds.width / 2;
-                var charCenterY = charBounds.top + charBounds.height / 2;
-                var charAnchor = is3D ? [charCenterX, charCenterY, 0] : [charCenterX, charCenterY];
-
-                // Corresponding center in original layer local coordinates (aligned to baseline)
-                var origCenterX = charLocalLeft + charBounds.width / 2;
-                var origCenterY = lineBaseline + charCenterY;
-
-                // Vector from original anchor point to character center
-                var deltaX = origCenterX - origAnchor[0];
-                var deltaY = origCenterY - origAnchor[1];
-
-                // Transform local delta to comp/parent coordinates
-                var compDeltaX = deltaX * scaleX * cosRot - deltaY * scaleY * sinRot;
-                var compDeltaY = deltaX * scaleX * sinRot + deltaY * scaleY * cosRot;
-
-                var newPos = is3D
-                    ? [origPos[0] + compDeltaX, origPos[1] + compDeltaY, origPos[2]]
-                    : [origPos[0] + compDeltaX, origPos[1] + compDeltaY];
-
-                // If 3D, try to use world matrix if available
-                if (is3D && typeof origLayer.toWorld === "function") {
-                    try {
-                        var worldPoint = origLayer.toWorld([origCenterX, origCenterY, origAnchor[2] || 0]);
-                        if (origParent && typeof origParent.fromWorld === "function") {
-                            newPos = origParent.fromWorld(worldPoint);
-                        } else if (!origParent) {
-                            newPos = worldPoint;
-                        }
-                    } catch (eWorld) {}
-                }
-
-                // Apply transforms
-                charLayer.anchorPoint.setValue(charAnchor);
-                charLayer.position.setValue(newPos);
-                charLayer.scale.setValue(origScale);
-                if (!is3D) {
-                    charLayer.rotation.setValue(origRot);
-                } else {
-                    charLayer.threeDLayer = true;
-                    try { charLayer.orientation.setValue(origLayer.orientation.value); } catch (e) {}
-                    try { charLayer.xRotation.setValue(origLayer.xRotation.value); } catch (e) {}
-                    try { charLayer.yRotation.setValue(origLayer.yRotation.value); } catch (e) {}
-                    try { charLayer.zRotation.setValue(origLayer.zRotation.value); } catch (e) {}
-                }
-                charLayer.opacity.setValue(origOpacity);
-
-                // Preserve layer timing and properties
-                charLayer.inPoint = origInPoint;
-                charLayer.outPoint = origOutPoint;
-                charLayer.startTime = origStartTime;
-                if (origLabel > 0) charLayer.label = origLabel;
-                charLayer.name = ch;
-
-                if (origParent) {
-                    try { charLayer.parent = origParent; } catch (eParent) {}
-                }
-            }
+            charLayer.moveBefore(origLayer);
         }
 
-        // Clean up measurement layer immediately
-        if (measureLayer) {
-            try { measureLayer.remove(); } catch (eRem) {}
-            measureLayer = null;
+        if (createdLayers.length === 0) {
+            alert("No non-space characters to separate.");
+            return;
         }
-
-        // Arrange layers in timeline directly above original layer in natural reading order
-        for (var i = 0; i < createdLayers.length; i++) {
-            try {
-                createdLayers[i].moveBefore(origLayer);
-            } catch (eMove) {}
-        }
-
-        // Disable visibility on original layer to reveal separated characters
         origLayer.enabled = false;
-
     } catch (err) {
+        for (var j = 0; j < createdLayers.length; j++) {
+            try { createdLayers[j].remove(); } catch (eRemove) {}
+        }
         alert("Chars error: " + err.message);
     } finally {
-        if (measureLayer) {
-            try { measureLayer.remove(); } catch (eFinally) {}
-        }
         app.endUndoGroup();
     }
 }
@@ -951,7 +850,7 @@ function getCameraWorldTransformAtTime(cam) {
             right: right
         };
     } catch (e) {
-        $.writeln("getCameraWorldTransformAtTime failed: " + e.message);
+        alert("getCameraWorldTransformAtTime CRASHED: " + e.message + " (line " + e.line + ")");
         return null;
     }
 }
@@ -1115,31 +1014,29 @@ function AE_Utility_Panel(thisObj) {
 
         win.orientation = "column";
         win.alignChildren = "fill";
-        win.margins = 0;
+        win.margins = 6;
         win.spacing = 0;
 
         var g = win.add("group");
         g.orientation = "column";
         g.alignChildren = "fill";
-        g.margins = 6;
-        g.spacing = 4;
+        g.margins = 2;
+        g.spacing = 6;
 
-        // ===== VERSION TITLE =====
+        // ===== PANEL HEADER =====
         var titleGroup = g.add("group");
-        titleGroup.orientation = "row";
-        titleGroup.alignment = ["center", "center"];
+        titleGroup.orientation = "column";
+        titleGroup.alignChildren = ["left", "center"];
+        titleGroup.margins = [4, 2, 4, 4];
+        titleGroup.spacing = 1;
 
-        var titleText = titleGroup.add("statictext", undefined, "AE Tools  v1.0");
-        titleText.alignment = ["center", "center"];
+        var titleText = titleGroup.add("statictext", undefined, "AE Utility");
+        titleText.alignment = ["left", "center"];
         try {
-            titleText.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
+            titleText.graphics.font = ScriptUI.newFont("Arial", "BOLD", 14);
         } catch(e) {}
-
-        var titleSep = g.add("panel");
-        titleSep.alignChildren = "fill";
-        titleSep.margins = 0;
-        titleSep.height = 1;
-        titleSep.minimumSize = [0, 1];
+        var subtitle = titleGroup.add("statictext", undefined, "Quick controls for your composition");
+        subtitle.alignment = ["left", "center"];
 
         // ---------- helpers ----------
         function getComp() {
@@ -1160,46 +1057,31 @@ function AE_Utility_Panel(thisObj) {
         }
 
         function btn(group, label, tip, fn, width) {
-            var b = group.add("button", undefined, label, { style:"toolbutton" });
+            var b = group.add("button", undefined, label);
             var sz = width || 26;
-            b.preferredSize = [sz, 20];
-            b.minimumSize = [sz, 20];
-            b.maximumSize = [sz, 20];
+            b.preferredSize = [sz, 24];
+            b.minimumSize = [sz, 24];
+            b.maximumSize = [sz, 24];
             b.helpTip = tip;
             b.onClick = fn;
             return b;
         }
 
         function addSection(title) {
-            var section = g.add("group");
+            var section = g.add("panel", undefined, title);
             section.orientation = "column";
             section.alignChildren = "fill";
-            section.margins = 0;
-            section.spacing = 3;
-
-            var titleText = section.add("statictext", undefined, title);
-            titleText.alignment = ["left", "center"];
-            try {
-                titleText.graphics.font = ScriptUI.newFont("Arial", "BOLD", 11);
-            } catch (e) {}
+            section.margins = [7, 8, 7, 7];
+            section.spacing = 4;
 
             var btnGroup = section.add("group");
             btnGroup.orientation = "row";
             btnGroup.alignment = ["center", "center"];
             btnGroup.alignChildren = ["center", "center"];
             btnGroup.margins = 0;
-            btnGroup.spacing = 2;
+            btnGroup.spacing = 4;
 
             return { section: section, btnGroup: btnGroup };
-        }
-
-        function addSeparator() {
-            var sep = g.add("panel");
-            sep.alignChildren = "fill";
-            sep.margins = 0;
-            sep.height = 1;
-            sep.minimumSize = [0, 1];
-            sep.maximumSize = [9999, 1];
         }
 
         // ===== CREATE LAYERS =====
@@ -1241,13 +1123,13 @@ function AE_Utility_Panel(thisObj) {
             },true);
         }, 43);
 
-        btn(createRow,"Adj Layer","Create adjustment layer (white solid) for effects", function(){
+        btn(createRow,"Adjustment","Create adjustment layer (white solid) for effects", function(){
             perSelection(function(c,l,i){
                 var a=c.layers.addSolid([1,1,1],"Adj "+(i+1),c.width,c.height,c.pixelAspect);
                 a.adjustmentLayer=true;a.label=11;
                 if(l){a.startTime=l.startTime;a.inPoint=l.inPoint;a.outPoint=l.outPoint;a.moveBefore(l);}
             },true);
-        }, 58);
+        }, 76);
 
         btn(createRow, "Solid", "Create a new solid layer", function() {
             var c = AE.requireComp();
@@ -1258,163 +1140,20 @@ function AE_Utility_Panel(thisObj) {
             app.endUndoGroup();
         }, 43);
 
-        btn(createRow, "Text", "Create text layer for typography and titles", function () {
+        btn(createRow, "Text", "Create a centered text layer", function () {
             var c = AE.requireComp();
             if (!c) return;
 
-            var targetLayer = c.selectedLayers.length ? c.selectedLayers[0] : null;
-
-            app.beginUndoGroup("AE Panel - Text");
-
-            // ── STEP 1: Create new text layer ──────────────────────────────
+            app.beginUndoGroup("Create Text Layer");
             var t = c.layers.addText("Text 1");
-            t.label = 5;
+            var textDocProp = t.property("ADBE Text Properties").property("ADBE Text Document");
+            var textDoc = textDocProp.value;
+            textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
+            textDocProp.setValue(textDoc);
 
-            // Inherit timing from reference layer
-            if (targetLayer) {
-                t.startTime = targetLayer.startTime;
-                t.inPoint   = targetLayer.inPoint;
-                t.outPoint  = targetLayer.outPoint;
-                t.moveBefore(targetLayer);
-            }
-
-            // ── STEP 3: Force AE to compute text bounds ────────────────────
-            // Split undo groups so AE commits the text layer before we read bounds
-            app.endUndoGroup();
-            app.beginUndoGroup("AE Panel - Text Anchor");
-            $.sleep(200);
-            try { app.refresh(); } catch(e) {}
-
-            // ── STEP 4: Center anchor (existing behavior — preserved) ───────
-            try {
-                var rect = t.sourceRectAtTime(c.time, false);
-                if (rect && rect.width > 0) {
-                    var cx = rect.left + rect.width / 2;
-                    var cy = rect.top  + rect.height / 2;
-                    var anc = t.anchorPoint.value;
-                    var pos = t.position.value;
-                    t.anchorPoint.setValue([anc[0] + cx, anc[1] + cy]);
-                    t.position.setValue([pos[0] + cx, pos[1] + cy]);
-                }
-            } catch (eAnc) {
-                $.writeln("Anchor center failed: " + eAnc.message);
-            }
-
-            // ── STEP 5: Camera-aware 3D placement ──────────────────────────
-            try {
-                var activeCam = null;
-                try { activeCam = c.activeCamera; } catch (eCam) {}
-
-                if (activeCam) {
-                    // Make the text layer 3D so it can live in 3D space
-                    t.threeDLayer = true;
-
-                    // Evaluate camera's full world transform at current playhead
-                    var camXF = getCameraWorldTransformAtTime(activeCam);
-
-                    if (camXF) {
-                        // Choose placement distance in front of camera
-                        var dist = getCameraPlacementDistance(c, activeCam);
-
-                        // World-space target point = camera pos + (forward * dist)
-                        var targetWorld = [
-                            camXF.pos[0] + camXF.fwd[0] * dist,
-                            camXF.pos[1] + camXF.fwd[1] * dist,
-                            camXF.pos[2] + camXF.fwd[2] * dist
-                        ];
-
-                        // Convert the world-space target into the text layer's
-                        // LOCAL position space. The text layer has no parent so
-                        // fromWorld() on any world point == world coords, but
-                        // if the text layer somehow gets a parent we still handle
-                        // it correctly via fromWorld on the layer itself.
-                        var localPos;
-                        try {
-                            localPos = t.fromWorld(targetWorld);
-                        } catch (eFW) {
-                            localPos = targetWorld; // fallback: world == local (unparented)
-                        }
-
-                        // Bake position — no expression
-                        t.position.setValue([localPos[0], localPos[1], localPos[2]]);
-
-                        // ── Orient text to face the camera ─────────────────
-                        // We want the text to face directly toward the camera.
-                        // The camera looks along +fwd; text should face -fwd (back at cam).
-                        //
-                        // AE orientation is XYZ Euler (degrees). We derive the
-                        // orientation angles from the camera's world axes so
-                        // the text plane is perpendicular to the camera's view ray.
-                        //
-                        // Strategy: build a rotation matrix from camera axes
-                        // and decompose to XYZ Euler:
-                        //
-                        //   text X-axis = camera right
-                        //   text Y-axis = camera up   (opposite of camera down)
-                        //   text Z-axis = -camera forward  (face toward camera)
-                        //
-                        // We use the camera's right/up/fwd already computed.
-
-                        var rx = camXF.right;   // text layer's local X in world
-                        var ry = camXF.up;       // text layer's local Y in world
-                        var rz = [               // text layer's local Z = -fwd
-                            -camXF.fwd[0],
-                            -camXF.fwd[1],
-                            -camXF.fwd[2]
-                        ];
-
-                        // Decompose rotation matrix [rx|ry|rz] → XYZ Euler (degrees)
-                        // Using standard AE/right-handed decomposition:
-                        //
-                        //   R = Rx * Ry * Rz
-                        //
-                        // Matrix columns are the world-space directions:
-                        //   col0 = rx, col1 = ry, col2 = rz
-                        //
-                        //   [ rx[0]  ry[0]  rz[0] ]
-                        //   [ rx[1]  ry[1]  rz[1] ]
-                        //   [ rx[2]  ry[2]  rz[2] ]
-                        //
-                        // Standard ZYX decomposition (matches AE Euler XYZ order):
-                        //   ry_angle = -asin(rz[0])
-                        //   rx_angle =  atan2(rz[1], rz[2])
-                        //   rz_angle =  atan2(ry[0], rx[0])
-
-                        var R20 = rz[0]; // m[2][0] in column-major = rz's x component
-                        var R21 = rz[1];
-                        var R22 = rz[2];
-                        var R10 = ry[0];
-                        var R00 = rx[0];
-
-                        var degX, degY, degZ;
-                        var clamped = Math.max(-1, Math.min(1, -R20));
-                        degY = Math.asin(clamped) * 180 / Math.PI;
-
-                        var cosY = Math.cos(degY * Math.PI / 180);
-                        if (Math.abs(cosY) > 0.0001) {
-                            degX = Math.atan2(R21 / cosY, R22 / cosY) * 180 / Math.PI;
-                            degZ = Math.atan2(R10 / cosY, R00 / cosY) * 180 / Math.PI;
-                        } else {
-                            // Gimbal lock — degenerate case, zero out roll
-                            degX = Math.atan2(-rz[1], ry[1]) * 180 / Math.PI;
-                            degZ = 0;
-                        }
-
-                        // Bake orientation — use xRotation/yRotation/zRotation
-                        // which are the individual-axis controls in AE 3D layers.
-                        // These are set in degrees and applied AFTER orientation.
-                        // Reset orientation to zero first, then set the axes.
-                        try { t.orientation.setValue([0, 0, 0]); } catch (eO) {}
-                        try { t.xRotation.setValue(degX); } catch (eX) {}
-                        try { t.yRotation.setValue(degY); } catch (eY) {}
-                        try { t.zRotation.setValue(degZ); } catch (eZ) {}
-                    }
-                }
-            } catch (eCamPlace) {
-                $.writeln("Camera placement failed (non-fatal): " + eCamPlace.message);
-                // Text layer is still created correctly above — just without camera placement
-            }
-
+            var rect = t.sourceRectAtTime(c.time, false);
+            t.anchorPoint.setValue([rect.left + rect.width / 2, rect.top + rect.height / 2]);
+            t.position.setValue([c.width / 2, c.height / 2]);
             app.endUndoGroup();
         }, 43);
 
@@ -1425,11 +1164,9 @@ function AE_Utility_Panel(thisObj) {
         createRow2.margins = 0;
         createRow2.spacing = 3;
 
-        btn(createRow2, "Chars", "Separate text into individual character layers", function () {
+        btn(createRow2, "Split Text", "Separate text into individual character layers", function () {
             separateTextToCharacters();
-        }, 88);
-
-        addSeparator();
+        }, 96);
 
         // ===== TIMING =====
         var timingSec = addSection("Timing");
@@ -1441,7 +1178,7 @@ function AE_Utility_Panel(thisObj) {
         utilRow2.margins = 0;
         utilRow2.spacing = 4;
 
-        btn(utilRow2, "1F Adj", "Create single-frame adjustment layer at playhead", function(){
+        btn(utilRow2, "1 Frame", "Create single-frame adjustment layer at playhead", function(){
             var c=getComp(); if(!c) return;
             var prevLayer=c.selectedLayers.length?c.selectedLayers[0]:null;
             app.beginUndoGroup("AE Panel - 1F Adj");
@@ -1511,8 +1248,6 @@ function AE_Utility_Panel(thisObj) {
             }
         }, 96);
 
-        addSeparator();
-
         // ===== EFFECTS =====
         var effectsSec = addSection("Effects");
 
@@ -1557,7 +1292,7 @@ function AE_Utility_Panel(thisObj) {
         twixtorRow.margins = 0;
         twixtorRow.spacing = 4;
 
-        btn(twixtorRow, "Seq Keys", "Snap selected keyframes to first key (1-frame spacing)", function(){
+        btn(twixtorRow, "Align Keys", "Snap selected keyframes to first key (1-frame spacing)", function(){
             var c=getComp(); if(!c) return;
             var sel=c.selectedLayers;
             if(sel.length===0) return;
@@ -1628,9 +1363,7 @@ function AE_Utility_Panel(thisObj) {
             resetProgressBar();
         }, 96);
 
-        btn(twixtorRow, "Seq Lay", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 96);
-
-        addSeparator();
+        btn(twixtorRow, "Sequence", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 96);
 
         // ===== ANCHOR =====
         var anchorSec = addSection("Anchor");
@@ -1655,17 +1388,10 @@ function AE_Utility_Panel(thisObj) {
 
             for (var col = 0; col < 3; col++) {
                 var label = presets[row][col];
-                var b = rowGroup.add("button", undefined, label, {style: "toolbutton"});
-                b.preferredSize = [24, 20];
-                b.minimumSize = [24, 20];
-                b.maximumSize = [24, 20];
-
-                try {
-                    b.graphics.backgroundColor = b.graphics.newBrush(
-                        b.graphics.BrushType.SOLID_COLOR,
-                        [0.2, 0.3, 0.6, 1]
-                    );
-                } catch(e) {}
+                var b = rowGroup.add("button", undefined, label);
+                b.preferredSize = [27, 23];
+                b.minimumSize = [27, 23];
+                b.maximumSize = [27, 23];
 
                 (function (presetMode) {
                     b.onClick = function () {
@@ -1688,8 +1414,6 @@ function AE_Utility_Panel(thisObj) {
             }
         }
 
-        addSeparator();
-
         // ===== COMPOSITION =====
         var toolsSec = addSection("Composition");
 
@@ -1708,6 +1432,24 @@ function AE_Utility_Panel(thisObj) {
             var selectedLayers = AE.requireSelection(comp);
             if (!selectedLayers) return;
 
+            var optionsDialog = new Window("dialog", "Isolate Layers");
+            optionsDialog.orientation = "column";
+            optionsDialog.alignChildren = "fill";
+            optionsDialog.margins = 14;
+            optionsDialog.spacing = 10;
+            optionsDialog.add("statictext", undefined, "Choose the duration for each new precomp:");
+            var adjustDuration = optionsDialog.add("checkbox", undefined, "Adjust composition duration to the selected layer span");
+            adjustDuration.value = false;
+
+            var optionsButtons = optionsDialog.add("group");
+            optionsButtons.orientation = "row";
+            optionsButtons.alignment = ["right", "center"];
+            optionsButtons.spacing = 6;
+            optionsButtons.add("button", undefined, "Cancel", { name: "cancel" });
+            optionsButtons.add("button", undefined, "Isolate", { name: "ok" });
+
+            if (optionsDialog.show() !== 1) return;
+
             app.beginUndoGroup("AE Panel - Precompose");
 
             var layerData = [];
@@ -1717,7 +1459,8 @@ function AE_Utility_Panel(thisObj) {
                     index: layer.index,
                     startTime: layer.startTime,
                     inPoint: layer.inPoint,
-                    outPoint: layer.outPoint
+                    outPoint: layer.outPoint,
+                    name: layer.name
                 });
             }
 
@@ -1725,9 +1468,13 @@ function AE_Utility_Panel(thisObj) {
 
             for (var i = 0; i < layerData.length; i++) {
                 var data = layerData[i];
-                comp.layers.precompose([data.index], "PreComp " + (i + 1), true);
+                var precomp = comp.layers.precompose([data.index], "PreComp " + (i + 1), true);
                 var newLayer = comp.layer(data.index);
                 if (newLayer) {
+                    if (adjustDuration.value) {
+                        fitPrecompToLayerSpan(precomp, precomp.layer(1), data.inPoint, data.outPoint, data.startTime);
+                        newLayer.startTime = data.inPoint;
+                    }
                     newLayer.inPoint = data.inPoint;
                     newLayer.outPoint = data.outPoint;
                 }

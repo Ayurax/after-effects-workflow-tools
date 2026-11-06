@@ -715,14 +715,14 @@ function askBeatMarkerOptions() {
     thresholdRow.orientation = "row";
     thresholdRow.alignChildren = ["left", "center"];
     thresholdRow.add("statictext", undefined, "Sensitivity (% of loudest peak)");
-    var thresholdInput = thresholdRow.add("edittext", undefined, "35");
+    var thresholdInput = thresholdRow.add("edittext", undefined, "50");
     thresholdInput.characters = 5;
 
     var spacingRow = dialog.add("group");
     spacingRow.orientation = "row";
     spacingRow.alignChildren = ["left", "center"];
     spacingRow.add("statictext", undefined, "Minimum spacing (seconds)");
-    var spacingInput = spacingRow.add("edittext", undefined, "0.20");
+    var spacingInput = spacingRow.add("edittext", undefined, "0.1");
     spacingInput.characters = 5;
 
     var note = dialog.add("statictext", undefined, "Analyzes enabled audio across its timeline span.");
@@ -866,6 +866,8 @@ function addBeatMarkers(comp, options) {
 
         for (var m = 0; m < chosen.length; m++) {
             var marker = new MarkerValue(String(m + 1));
+            // Label 1 is red in After Effects; label 0 keeps the default white marker.
+            try { marker.label = chosen[m].value >= maxValue * 0.60 ? 1 : 0; } catch (eMarkerLabel) {}
             marker.setParameters([["AEUtilityBeatMarker", "1"]]);
             var markerTime = chosen[m].time;
             for (var existing = 1; existing <= markerProperty.numKeys; existing++) {
@@ -1574,14 +1576,37 @@ function AE_Utility_Panel(thisObj) {
         btn(twixtorRow, "Sequence", "Arrange selected layers end-to-end (no gaps)", sequenceSelectedLayers, 96);
 
         // ===== ANCHOR =====
-        var anchorSec = addSection("Anchor");
+        var anchorSec = g.add("group");
+        anchorSec.orientation = "column";
+        anchorSec.alignment = ["center", "center"];
+        anchorSec.alignChildren = ["center", "center"];
+        anchorSec.margins = 0;
+        anchorSec.spacing = 4;
 
-        var anchorContent = anchorSec.section.add("group");
+        var anchorHeaderBtn = anchorSec.add("button", undefined, "Anchor +", { style: "toolbutton" });
+        anchorHeaderBtn.alignment = ["center", "center"];
+        anchorHeaderBtn.preferredSize = [196, 20];
+        anchorHeaderBtn.minimumSize = [196, 20];
+        anchorHeaderBtn.maximumSize = [196, 20];
+        anchorHeaderBtn.helpTip = "Show or hide anchor point presets";
+
+        var anchorContent = anchorSec.add("group");
         anchorContent.orientation = "column";
         anchorContent.alignment = ["center", "center"];
         anchorContent.alignChildren = ["center", "center"];
         anchorContent.margins = 0;
         anchorContent.spacing = 2;
+        anchorContent.visible = false;
+        anchorContent.maximumSize = [9999, 0];
+
+        var isAnchorExpanded = false;
+        anchorHeaderBtn.onClick = function() {
+            isAnchorExpanded = !isAnchorExpanded;
+            anchorContent.visible = isAnchorExpanded;
+            anchorContent.maximumSize = isAnchorExpanded ? [9999, 9999] : [9999, 0];
+            anchorHeaderBtn.text = isAnchorExpanded ? "Anchor -" : "Anchor +";
+            win.layout.layout(true);
+        };
 
         // 3x3 Anchor Preset Grid
         var presets = [["TL", "TC", "TR"], ["CL", "CC", "CR"], ["BL", "BC", "BR"]];
@@ -1692,6 +1717,20 @@ function AE_Utility_Panel(thisObj) {
         }, 64);
 
         btn(tRow1, "Fit Comp", "Crop composition to layer bounds (supports rotation & scale)", cropCompToSelection, 62);
+
+        var cacheRow = toolsSec.section.add("group");
+        cacheRow.orientation = "row";
+        cacheRow.alignment = ["center", "center"];
+        cacheRow.alignChildren = ["center", "center"];
+        cacheRow.margins = 0;
+        cacheRow.spacing = 4;
+        btn(cacheRow, "Purge Cache", "Clear After Effects memory and disk caches", function(){
+            try {
+                app.purge(PurgeTarget.ALL_CACHES);
+            } catch (err) {
+                alert("Cache purge error: " + err.message);
+            }
+        }, 196);
 
         win.layout.layout(true);
         return win;

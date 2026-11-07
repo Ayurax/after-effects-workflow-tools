@@ -1340,10 +1340,58 @@ function AE_Utility_Panel(thisObj) {
         btn(createRow, "Solid", "Create a new solid layer", function() {
             var c = AE.requireComp();
             if (!c) return;
+
+            var selectedLayers = c.selectedLayers;
+            var spanIn = c.duration;
+            var spanOut = 0;
+            var topLayer = null;
+            for (var i = 0; i < selectedLayers.length; i++) {
+                var layer = selectedLayers[i];
+                spanIn = Math.min(spanIn, layer.inPoint);
+                spanOut = Math.max(spanOut, layer.outPoint);
+                if (!topLayer || layer.index < topLayer.index) topLayer = layer;
+            }
+
             app.beginUndoGroup("AE Panel - Solid");
-            var countBefore = c.numLayers;
-            app.executeCommand(2038);
-            app.endUndoGroup();
+            try {
+                var countBefore = c.numLayers;
+                app.executeCommand(2038);
+                if (c.numLayers > countBefore && topLayer && spanOut > spanIn) {
+                    // AE can insert the solid below the selected layer. The
+                    // newly created solid is selected when the settings dialog closes.
+                    var newSelection = c.selectedLayers;
+                    var solid = null;
+                    for (var selectedIndex = 0; selectedIndex < newSelection.length && !solid; selectedIndex++) {
+                        var selectedAfterDialog = newSelection[selectedIndex];
+                        var wasAlreadySelected = false;
+                        for (var originalIndex = 0; originalIndex < selectedLayers.length; originalIndex++) {
+                            var originalLayer = selectedLayers[originalIndex];
+                            if (selectedAfterDialog === originalLayer ||
+                                (selectedAfterDialog.id !== undefined && originalLayer.id !== undefined && selectedAfterDialog.id === originalLayer.id)) {
+                                wasAlreadySelected = true;
+                                break;
+                            }
+                        }
+                        if (!wasAlreadySelected) solid = selectedAfterDialog;
+                    }
+                    if (!solid) {
+                        for (var layerIndex = 1; layerIndex <= c.numLayers; layerIndex++) {
+                            var candidate = c.layer(layerIndex);
+                            if (candidate.name !== topLayer.name && candidate.source && candidate.source.mainSource instanceof SolidSource) {
+                                solid = candidate;
+                                break;
+                            }
+                        }
+                    }
+                    if (!solid) throw new Error("Could not locate the new solid layer.");
+                    solid.startTime = spanIn;
+                    solid.inPoint = spanIn;
+                    solid.outPoint = spanOut;
+                    solid.moveBefore(topLayer);
+                }
+            } finally {
+                app.endUndoGroup();
+            }
         }, 43);
 
         btn(createRow, "Text", "Create a centered text layer", function () {

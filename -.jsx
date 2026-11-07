@@ -867,7 +867,7 @@ function addBeatMarkers(comp, options) {
         for (var m = 0; m < chosen.length; m++) {
             var marker = new MarkerValue(String(m + 1));
             // Label 1 is red in After Effects; label 0 keeps the default white marker.
-            try { marker.label = chosen[m].value >= maxValue * 0.60 ? 1 : 0; } catch (eMarkerLabel) {}
+            try { marker.label = chosen[m].value >= maxValue * 0.65 ? 1 : 0; } catch (eMarkerLabel) {}
             marker.setParameters([["AEUtilityBeatMarker", "1"]]);
             var markerTime = chosen[m].time;
             for (var existing = 1; existing <= markerProperty.numKeys; existing++) {
@@ -1283,6 +1283,10 @@ function AE_Utility_Panel(thisObj) {
 
         btn(createRow,"Null","Create a null object for parenting and control", function(){
             perSelection(function(c,l){
+                var targetWorldPos = null;
+                if (l) {
+                    try { targetWorldPos = l.toWorld(l.anchorPoint.value); } catch (eWorldPos) {}
+                }
                 var n=c.layers.addNull(); n.label=1;
                 if(l){
                     try {
@@ -1299,9 +1303,14 @@ function AE_Utility_Panel(thisObj) {
                     }
                     n.moveBefore(l);
                     if(l.threeDLayer===true) n.threeDLayer=true;
+                    // Keep each generated null's anchor centered even when it is
+                    // inserted above an already-parented null.
                     try {
-                        var worldPos=l.toWorld(l.anchorPoint.value);
-                        n.position.setValue(l.threeDLayer ? [worldPos[0], worldPos[1], worldPos[2]] : [worldPos[0], worldPos[1]]);
+                        n.anchorPoint.setValue([n.width / 2, n.height / 2]);
+                    } catch (eAnchorCenter) {}
+                    try {
+                        if (!targetWorldPos) throw new Error("Could not read layer world position");
+                        n.position.setValue(l.threeDLayer ? [targetWorldPos[0], targetWorldPos[1], targetWorldPos[2]] : [targetWorldPos[0], targetWorldPos[1]]);
                     } catch (e) {
                         try { n.position.setValue(l.position.value); } catch (e2) {}
                     }
@@ -1312,10 +1321,20 @@ function AE_Utility_Panel(thisObj) {
 
         btn(createRow,"Adjustment","Create adjustment layer (white solid) for effects", function(){
             perSelection(function(c,l,i){
-                var a=c.layers.addSolid([1,1,1],"Adj "+(i+1),c.width,c.height,c.pixelAspect);
-                a.adjustmentLayer=true;a.label=11;
-                if(l){a.startTime=l.startTime;a.inPoint=l.inPoint;a.outPoint=l.outPoint;a.moveBefore(l);}
-            },true);
+                var a = c.layers.addSolid([1,1,1], "Adj " + (i + 1), c.width, c.height, c.pixelAspect);
+                a.adjustmentLayer = true;
+                a.label = 11;
+                if (l) {
+                    var layerIn = Math.min(l.inPoint, l.outPoint);
+                    var layerOut = Math.max(l.inPoint, l.outPoint);
+                    // A new solid starts at comp time zero. Align its source start
+                    // with the clip before applying that clip's visible time span.
+                    a.startTime = layerIn;
+                    a.inPoint = layerIn;
+                    a.outPoint = layerOut;
+                    a.moveBefore(l);
+                }
+            }, true);
         }, 76);
 
         btn(createRow, "Solid", "Create a new solid layer", function() {
@@ -1726,7 +1745,17 @@ function AE_Utility_Panel(thisObj) {
         cacheRow.spacing = 4;
         btn(cacheRow, "Purge Cache", "Clear After Effects memory and disk caches", function(){
             try {
-                app.purge(PurgeTarget.ALL_CACHES);
+                var versionParts = String(app.version).split(".");
+                var majorVersion = parseInt(versionParts[0], 10);
+                var minorVersion = parseInt(versionParts[1], 10);
+                if (majorVersion > 24 || (majorVersion === 24 && minorVersion >= 3)) {
+                    app.purge(PurgeTarget.ALL_CACHES);
+                } else {
+                    // Before AE 24.3, ALL_CACHES only purges RAM. Use AE's full
+                    // All Memory & Disk Cache command so the preview cache clears too.
+                    var purgeCommand = app.findMenuCommandId("All Memory & Disk Cache...");
+                    app.executeCommand(purgeCommand || 10200);
+                }
             } catch (err) {
                 alert("Cache purge error: " + err.message);
             }

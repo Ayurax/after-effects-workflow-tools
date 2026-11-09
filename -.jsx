@@ -1398,17 +1398,37 @@ function AE_Utility_Panel(thisObj) {
             var c = AE.requireComp();
             if (!c) return;
 
-            app.beginUndoGroup("Create Text Layer");
-            var t = c.layers.addText("Text 1");
-            var textDocProp = t.property("ADBE Text Properties").property("ADBE Text Document");
-            var textDoc = textDocProp.value;
-            textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
-            textDocProp.setValue(textDoc);
+            var selectedLayers = c.selectedLayers;
+            var spanIn = c.duration;
+            var spanOut = 0;
+            var topLayer = null;
+            for (var i = 0; i < selectedLayers.length; i++) {
+                var layer = selectedLayers[i];
+                spanIn = Math.min(spanIn, layer.inPoint);
+                spanOut = Math.max(spanOut, layer.outPoint);
+                if (!topLayer || layer.index < topLayer.index) topLayer = layer;
+            }
 
-            var rect = t.sourceRectAtTime(c.time, false);
-            t.anchorPoint.setValue([rect.left + rect.width / 2, rect.top + rect.height / 2]);
-            t.position.setValue([c.width / 2, c.height / 2]);
-            app.endUndoGroup();
+            app.beginUndoGroup("Create Text Layer");
+            try {
+                var t = c.layers.addText("Text 1");
+                var textDocProp = t.property("ADBE Text Properties").property("ADBE Text Document");
+                var textDoc = textDocProp.value;
+                textDoc.justification = ParagraphJustification.CENTER_JUSTIFY;
+                textDocProp.setValue(textDoc);
+
+                var rect = t.sourceRectAtTime(c.time, false);
+                t.anchorPoint.setValue([rect.left + rect.width / 2, rect.top + rect.height / 2]);
+                t.position.setValue([c.width / 2, c.height / 2]);
+                if (topLayer && spanOut > spanIn) {
+                    t.startTime = spanIn;
+                    t.inPoint = spanIn;
+                    t.outPoint = spanOut;
+                    t.moveBefore(topLayer);
+                }
+            } finally {
+                app.endUndoGroup();
+            }
         }, 43);
 
         var createRow2 = createSec.section.add("group");
